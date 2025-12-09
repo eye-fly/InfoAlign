@@ -46,14 +46,26 @@ def save_prediction(model, device, loader, dataset, output_dir, seed):
     y_pred = []
     model.eval()
     for step, batch in enumerate(loader):
-        batch = batch.to(device)
-        if batch.x.shape[0] == 1:
-            pass
-        else:
+        if hasattr(batch, 'x'): # It's a pyg Data object
+            batch = batch.to(device)
+            data = batch
+            targets = batch.y
+            if batch.x.shape[0] == 1:
+                pass
+            else:
+                with torch.no_grad():
+                    pred = model(data)
+                y_true.append(targets.view(pred.shape).detach().cpu())
+                y_pred.append(pred.detach().cpu())
+        else: # It's a tuple from the fingerprint dataset
+            data, targets = batch
+            data = data.to(device, dtype=torch.float32)
+            targets = targets.to(device, dtype=torch.float32)
             with torch.no_grad():
-                pred = model(batch)
-            y_true.append(batch.y.view(pred.shape).detach().cpu())
+                pred = model(data)
+            y_true.append(targets.view(pred.shape).detach().cpu())
             y_pred.append(pred.detach().cpu())
+
     y_true = torch.cat(y_true, dim=0).numpy()
     y_pred = torch.cat(y_pred, dim=0).numpy()
 
@@ -90,14 +102,26 @@ def validate(args, model, loader):
     device = args.device
     model.eval()
     for step, batch in enumerate(loader):
-        batch = batch.to(device)
-        if batch.x.shape[0] == 1:
-            pass
-        else:
+        if hasattr(batch, 'x'): # It's a pyg Data object
+            batch = batch.to(device)
+            data = batch
+            targets = batch.y
+            if batch.x.shape[0] == 1:
+                pass
+            else:
+                with torch.no_grad():
+                    pred = model(data)
+                y_true.append(targets.view(pred.shape).detach().cpu())
+                y_pred.append(pred.detach().cpu())
+        else: # It's a tuple from the fingerprint dataset
+            data, targets = batch
+            data = data.to(device, dtype=torch.float32)
+            targets = targets.to(device, dtype=torch.float32)
             with torch.no_grad():
-                pred = model(batch)
-            y_true.append(batch.y.view(pred.shape).detach().cpu())
+                pred = model(data)
+            y_true.append(targets.view(pred.shape).detach().cpu())
             y_pred.append(pred.detach().cpu())
+
     y_true = torch.cat(y_true, dim=0).numpy()
     y_pred = torch.cat(y_pred, dim=0).numpy()
 

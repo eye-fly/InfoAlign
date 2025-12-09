@@ -45,13 +45,13 @@ class PygPredictionMoleculeDataset(InMemoryDataset):
         super(PygPredictionMoleculeDataset, self).__init__(
             self.root, transform, pre_transform
         )
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
 
     def get_idx_split(self):
         path = osp.join(self.root, "split", "scaffold")
 
         if os.path.isfile(os.path.join(path, "split_dict.pt")):
-            return torch.load(os.path.join(path, "split_dict.pt"))
+            return torch.load(os.path.join(path, "split_dict.pt"), weights_only=False)
         else:
             print("Initializing split...")
             data_df = pd.read_csv(osp.join(self.raw_dir, "assays.csv.gz"))
@@ -141,6 +141,7 @@ class PredictionMoleculeDataset(object):
         self.folder = osp.join(root, name)
         self.transform = transform
         self.raw_data = os.path.join(self.folder, "raw", "assays.csv.gz")
+        self.task_type = 'finetune'
 
         self.eval_metric = "roc_auc"
         if name == "chembl2k":
@@ -177,7 +178,7 @@ class PredictionMoleculeDataset(object):
     def get_idx_split(self, to_list=False):
         path = osp.join(self.folder, "split", "scaffold")
         if os.path.isfile(os.path.join(path, "split_dict.pt")):
-            split_dict = torch.load(os.path.join(path, "split_dict.pt"))
+            split_dict = torch.load(os.path.join(path, "split_dict.pt"), weights_only=False)
         else:
             data_df = pd.read_csv(self.raw_data)
             train_idx, valid_idx, test_idx = scaffold_split(data_df)
@@ -331,15 +332,7 @@ class PredictionMoleculeDataset(object):
 
     def __getitem__(self, idx):
         """Get datapoint(s) with index(indices)"""
-
-        if isinstance(idx, (int, np.integer)):
-            return self.data[idx], self.labels[idx]
-        elif isinstance(idx, (list, np.ndarray)):
-            return [self.data[i] for i in idx], [self.labels[i] for i in idx]
-        elif isinstance(idx, torch.LongTensor):
-            return self.data[idx], self.labels[idx]
-
-        raise IndexError("Not supported index {}.".format(type(idx).__name__))
+        return self.data[idx], self.labels[idx]
 
     def __len__(self):
         return len(self.data)
