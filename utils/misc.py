@@ -127,6 +127,41 @@ def validate(args, model, loader):
 
     return eval_func(y_pred, y_true)
 
+def get_embedings(args, model, loader):
+    y_true = []
+    y_pred = []
+    device = args.device
+    model.eval()
+    for step, batch in enumerate(loader):
+        
+        if hasattr(batch, 'x'): # It's a pyg Data object
+            batch = batch.to(device)
+            data = batch
+            targets = batch.y
+            if batch.x.shape[0] == 1:
+                pass
+            else:
+                with torch.no_grad():
+                    pred = model.extract_graph_embedding(data)
+                y_true.append(targets.detach().cpu())
+                y_pred.append(pred.detach().cpu())
+        
+        else: # It's a tuple from the fingerprint dataset
+            data, targets = batch
+            data = data.to(device, dtype=torch.float32)
+            targets = targets.to(device, dtype=torch.float32)
+            with torch.no_grad():
+                embeddings = model.extract_graph_embedding(data)
+            y_true.append(targets.detach().cpu())
+            y_pred.append(embeddings.detach().cpu())
+            print(f"Processed batch {step+1}/{len(loader)}")
+            print(f"Embeddings shape: {embeddings.shape}")
+            print(f"Targets shape: {targets.shape}")
+    y_true = torch.cat(y_true, dim=0).numpy()
+    y_pred = torch.cat(y_pred, dim=0).numpy()
+
+    return y_pred, y_true
+
 
 def init_weights(net, init_type="normal", init_gain=0.02):
     """Initialize network weights.

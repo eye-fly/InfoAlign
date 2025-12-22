@@ -1,0 +1,2 @@
+model,dataset,metric,train,valid,test,suc_80,suc_85,suc_90,suc_95
+pretrain,finetune-fibrosis,roc_auc,0.9495±0.0118,0.8255±0.0134,0.7411±0.0077,0.0±0.0,0.0±0.0,0.0±0.0,0.0±0.0
