@@ -32,7 +32,7 @@ def eval_func(pred, true, reduction=True):
                 "No positively labeled data available. Cannot compute ROC-AUC."
             )
         return {"roc_auc": sum(rocauc_list) / len(rocauc_list), "count": count_dict} if reduction else {"roc_auc": rocauc_list}
-    
+
     elif task_type == 'regression':
         mae_list = []
         for i in range(true.shape[1]):
@@ -46,25 +46,13 @@ def save_prediction(model, device, loader, dataset, output_dir, seed):
     y_pred = []
     model.eval()
     for step, batch in enumerate(loader):
-        if hasattr(batch, 'x'): # It's a pyg Data object
-            batch = batch.to(device)
-            data = batch
-            targets = batch.y
-            if batch.x.shape[0] == 1:
-                pass
-            else:
-                with torch.no_grad():
-                    pred = model(data)
-                y_true.append(targets.view(pred.shape).detach().cpu())
-                y_pred.append(pred.detach().cpu())
-        else: # It's a tuple from the fingerprint dataset
-            data, targets = batch
-            data = data.to(device, dtype=torch.float32)
-            targets = targets.to(device, dtype=torch.float32)
-            with torch.no_grad():
-                pred = model(data)
-            y_true.append(targets.view(pred.shape).detach().cpu())
-            y_pred.append(pred.detach().cpu())
+        data, targets = batch
+        data = data.to(device, dtype=torch.float32)
+        targets = targets.to(device, dtype=torch.float32)
+        with torch.no_grad():
+            pred = model(data)
+        y_true.append(targets.view(pred.shape).detach().cpu())
+        y_pred.append(pred.detach().cpu())
 
     y_true = torch.cat(y_true, dim=0).numpy()
     y_pred = torch.cat(y_pred, dim=0).numpy()
@@ -72,7 +60,7 @@ def save_prediction(model, device, loader, dataset, output_dir, seed):
     assay_path = f"raw_data/{dataset.name}/raw/assays.csv.gz"
     assay_df = pd.read_csv(assay_path, compression="gzip")
     assay_names = assay_df.columns[dataset.start_column :]
-    
+
     y_pred[np.isnan(y_true)] = np.nan
     os.makedirs(output_dir, exist_ok=True)
 
@@ -102,25 +90,13 @@ def validate(args, model, loader):
     device = args.device
     model.eval()
     for step, batch in enumerate(loader):
-        if hasattr(batch, 'x'): # It's a pyg Data object
-            batch = batch.to(device)
-            data = batch
-            targets = batch.y
-            if batch.x.shape[0] == 1:
-                pass
-            else:
-                with torch.no_grad():
-                    pred = model(data)
-                y_true.append(targets.view(pred.shape).detach().cpu())
-                y_pred.append(pred.detach().cpu())
-        else: # It's a tuple from the fingerprint dataset
-            data, targets = batch
-            data = data.to(device, dtype=torch.float32)
-            targets = targets.to(device, dtype=torch.float32)
-            with torch.no_grad():
-                pred = model(data)
-            y_true.append(targets.view(pred.shape).detach().cpu())
-            y_pred.append(pred.detach().cpu())
+        data, targets = batch
+        data = data.to(device, dtype=torch.float32)
+        targets = targets.to(device, dtype=torch.float32)
+        with torch.no_grad():
+            pred = model(data)
+        y_true.append(targets.view(pred.shape).detach().cpu())
+        y_pred.append(pred.detach().cpu())
 
     y_true = torch.cat(y_true, dim=0).numpy()
     y_pred = torch.cat(y_pred, dim=0).numpy()
@@ -129,14 +105,7 @@ def validate(args, model, loader):
 
 
 def init_weights(net, init_type="normal", init_gain=0.02):
-    """Initialize network weights.
-    Parameters:
-        net (network)   -- network to be initialized
-        init_type (str) -- the name of an initialization method: normal | xavier | kaiming | orthogonal
-        init_gain (float)    -- scaling factor for normal, xavier and orthogonal.
-    """
-
-    def init_func(m):  # define the initialization function
+    def init_func(m):
         classname = m.__class__.__name__
         if hasattr(m, "weight") and (
             classname.find("Conv") != -1 or classname.find("Linear") != -1
@@ -159,18 +128,14 @@ def init_weights(net, init_type="normal", init_gain=0.02):
                 torch.nn.init.constant_(m.bias.data, 0.0)
         elif (
             classname.find("BatchNorm2d") != -1
-        ):  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
+        ):
             torch.nn.init.normal_(m.weight.data, 1.0, init_gain)
             torch.nn.init.constant_(m.bias.data, 0.0)
 
     print("initialize network with %s" % init_type)
-    net.apply(init_func)  # apply the initialization function <init_func>
+    net.apply(init_func)
 
 class AverageMeter(object):
-    """Computes and stores the average and current value
-    Imported from https://github.com/pytorch/examples/blob/master/imagenet/main.py#L247-L262
-    """
-
     def __init__(self):
         self.reset()
 
@@ -185,32 +150,3 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-
-def log_base(base, x):
-    return np.log(x) / np.log(base)
-
-
-def _eval_rocauc(y_true, y_pred):
-    """
-    compute ROC-AUC averaged across tasks
-    """
-    rocauc_list = []
-    for i in range(y_true.shape[1]):
-        # AUC is only defined when there is at least one positive data.
-        if np.sum(y_true[:, i] == 1) > 0 and np.sum(y_true[:, i] == 0) > 0:
-            # ignore nan values
-            is_labeled = y_true[:, i] == y_true[:, i]
-            rocauc_list.append(
-                roc_auc_score(y_true[is_labeled, i], y_pred[is_labeled, i])
-            )
-
-    if len(rocauc_list) == 0:
-        raise RuntimeError(
-            "No positively labeled data available. Cannot compute ROC-AUC."
-        )
-    return {"rocauc": sum(rocauc_list) / len(rocauc_list)}
-
-
-if __name__ == "__main__":
-    pass
