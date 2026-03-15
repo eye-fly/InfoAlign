@@ -1,0 +1,19 @@
+# ChEMBL2K Classification Evaluation — ROC-AUC (mean over 41 tasks)
+# Split: scaffold  |  Train/Valid/Test: 1413/353/589
+# Encoder: V=512, d=256, 6 layers, K_layers=[1,3,5], gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15
+# Head: ClassificationHead MLP(256->256->41), 100 finetune epochs, frozen encoder unless noted
+# All runs: seed=0, batch=256, lr=1e-3
+
+Model                                       valid    test
+----------------------------------------------------------
+Random encoder + frozen head                0.7855   0.7732
+Pretrained encoder (60ep, no decoder)
+  + frozen head                             0.7809   0.7370
+----------------------------------------------------------
+
+findings:
+  Pretraining is worse vs random init (-0.036 test AUC).
+  Confirms encoder collapse — 60 epochs of self-supervised training without
+  a reconstruction decoder produces representations no better than random.
+  Fixing this requires a stronger decoder (AR SMILES or multi-modal).
+
