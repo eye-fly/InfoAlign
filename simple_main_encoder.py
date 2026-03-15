@@ -40,7 +40,7 @@ def main(args, seed):
         device = torch.device("cpu")
     args.device = device
 
-    dataset = get_data(args, "./raw_data", transform="fingerprint")
+    dataset = get_data(args, "./raw_data", transform="smiles")
     split_idx = dataset.get_idx_split()
 
     if args.subset_ratio < 1.0:
@@ -54,9 +54,20 @@ def main(args, seed):
     valid_loader = DataLoader(Subset(dataset, split_idx["valid"]), batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     test_loader  = DataLoader(Subset(dataset, split_idx["test"]),  batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
-    # model = MLP(num_tasks=dataset.num_tasks, emb_dim=args.emb_dim, drop_ratio=args.drop_ratio).to(device)
-    # TODO: add arguments below to args. Note that dx = default args.emb_dim = 2048
-    encoder = Encoder(V=100, dx=2048, d=512, num_heads=8, num_layers=6, K_layers=[1,3,5], gamma_teacher=0.95, gamma_codebook=0.5, mask_prob=0.5).to(device)
+    encoder = Encoder(
+        V=512,
+        dx=None,                              # unused in SMILES mode
+        d=256,
+        num_heads=8,
+        num_layers=6,
+        K_layers=[1, 3, 5],
+        gamma_teacher=0.95,
+        gamma_codebook=0.99,
+        mask_prob=0.15,
+        vocab_size=dataset.vocab_size,
+        mask_token_id=dataset.mask_token_id,
+        pad_token_id=dataset.pad_token_id,
+    ).to(device)
     optimizer = optim.Adam(encoder.student_params(), lr=args.lr, weight_decay=args.wdecay)
     scheduler = get_cosine_schedule_with_warmup(optimizer, 0, args.epochs * args.steps)
 

@@ -149,32 +149,33 @@ class Block(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dx, d_model, num_heads, num_layers):
+    def __init__(self, dx, d_model, num_heads, num_layers, vocab_size=None, pad_token_id=0):
         super().__init__()
-        # self.config = config
-        # self.embedding_layer = EmbeddingLayer(
-        #     config.vocab_size, config.d_model, config.max_len
-        # )
-        self.input_proj = nn.Linear(dx, d_model) # x : (B,L,dx) -> (B,L,d_model)
+        if vocab_size is not None:
+            # SMILES / token sequence mode: input is (B, L) LongTensor
+            self.embedding  = nn.Embedding(vocab_size, d_model, padding_idx=pad_token_id)
+            self.input_proj = None
+        else:
+            # Float feature mode: input is (B, L, dx) FloatTensor
+            self.embedding  = None
+            self.input_proj = nn.Linear(dx, d_model)
+
         self.blocks = nn.ModuleList(
             [Block(d_model, num_heads) for _ in range(num_layers)]
         )
 
-        # self.head = nn.Linear(config.d_model, config.vocab_size, bias=False) # This is not LLM. Maybe we could
-        # # add sth like self.head = nn.Linear(config.d_model, config.latent_dim, bias=False) later.
-
     def forward(self, input_ids, attention_mask=None, return_all_layers=False):
-        # output = self.embedding_layer(input_ids)
-        output = self.input_proj(input_ids)
-        all_layers = []
+        if self.embedding is not None:
+            output = self.embedding(input_ids)   # (B, L) -> (B, L, d_model)
+        else:
+            output = self.input_proj(input_ids)  # (B, L, dx) -> (B, L, d_model)
 
+        all_layers = []
         for block in self.blocks:
             output = block(output, attention_mask)
             if return_all_layers:
                 all_layers.append(output)
-        
 
-        # output = self.head(output)
         if return_all_layers:
             return output, all_layers
         return output
@@ -190,6 +191,15 @@ def applyMask(x, mask_prob=0.5):
     mask = torch.rand(B, L) < mask_prob
     xMask = x.clone()
     xMask[mask,:] = 0
+    return xMask, mask
+
+def applyTokenMask(x, mask_prob, mask_token_id):
+    # x: (B, L) LongTensor of token ids
+    # Returns masked token ids and a bool mask of which positions were masked.
+    B, L = x.shape
+    mask = torch.rand(B, L, device=x.device) < mask_prob
+    xMask = x.clone()
+    xMask[mask] = mask_token_id
     return xMask, mask
 
 def applyMaskWithSpans(x, mask_ratio=0.5, mask_span=10):
@@ -223,11 +233,8 @@ def applyMaskWithSpans(x, mask_ratio=0.5, mask_span=10):
 ################################################################
 
 class Codebook(nn.Module):
-    def __init__(self, V : int, d : int, gamma_codebook=0.5):
+    def __init__(self, V : int, d : int, gamma_codebook=0.99):
         super().__init__()
-        # self.s = torch.randn(V,d)
-        # self.n = torch.ones(V,1, dtype=torch.float)
-        # self.e = self.s / self.n
         self.register_buffer("s", torch.randn(V, d))
         self.register_buffer("n", torch.ones(V, 1))
         self.register_buffer("e", self.s / self.n)
@@ -235,10 +242,10 @@ class Codebook(nn.Module):
         self.gamma_codebook = gamma_codebook
         self.V = V
         self.d = d
-    
+
     def update(self, y, z):
-        # We assume z.shape = B, L, d
-        # We assume y.shape = B, L, V
+        # z: (B, L, d) — teacher representations
+        # y: (B, L)    — codebook assignments
         assert len(z.shape) == 3
         assert z.shape[2] == self.d
         for v in range(self.V):
@@ -246,6 +253,15 @@ class Codebook(nn.Module):
             self.s[v] = self.gamma_codebook*self.s[v] + (1-self.gamma_codebook)*z_v.sum(dim=0)
             self.n[v] = self.gamma_codebook * self.n[v] + (1 - self.gamma_codebook) * (y == v).sum()
         self.e = self.s / (self.n + 1e-8)
+
+        # Dead codeword restart: re-initialise any codeword with near-zero usage
+        # from a random live teacher embedding so it can compete again.
+        dead = (self.n < 1.0).squeeze(-1)  # (V,) bool
+        if dead.any():
+            live = z.reshape(-1, self.d).detach()
+            perm = torch.randperm(live.shape[0], device=live.device)[:dead.sum()]
+            self.e[dead] = live[perm]
+            self.s[dead] = self.e[dead] * self.n[dead]
     
     def findMostSimilarInCodebook(self, z):
         # z: (B,L,d)
@@ -266,18 +282,22 @@ class PseudoLabelPredictionHead(nn.Module):
         # return F.softmax(out, -1) # dim = -1, it represents V values
 
 class Encoder(nn.Module):
-    def __init__(self, V, dx, d, num_heads, num_layers, K_layers, gamma_teacher=0.95, gamma_codebook=0.5, mask_prob=0.5):
+    def __init__(self, V, dx, d, num_heads, num_layers, K_layers,
+                 gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
+                 vocab_size=None, mask_token_id=None, pad_token_id=0):
         super().__init__()
-        # TODO: add argument device
-        assert gamma_teacher <= 1. and gamma_teacher >=0.
-        assert gamma_codebook <= 1. and gamma_codebook >=0.
+        assert gamma_teacher <= 1. and gamma_teacher >= 0.
+        assert gamma_codebook <= 1. and gamma_codebook >= 0.
         self.V = V
         self.d = d
         self.K_layers = K_layers
         self.gamma_teacher = gamma_teacher
         self.gamma_codebook = gamma_codebook
         self.mask_prob = mask_prob
-        self.encoder = Transformer(dx, d, num_heads, num_layers)
+        self.vocab_size    = vocab_size
+        self.mask_token_id = mask_token_id
+        self.pad_token_id  = pad_token_id
+        self.encoder = Transformer(dx, d, num_heads, num_layers, vocab_size=vocab_size, pad_token_id=pad_token_id)
         self.teacher = copy.deepcopy(self.encoder)
         for p in self.teacher.parameters():
             p.requires_grad=False
@@ -302,30 +322,34 @@ class Encoder(nn.Module):
             pt.data.mul_(self.gamma_teacher).add_(ps.data, alpha=1-self.gamma_teacher)
 
     def loss(self, x, update_codebooks=False):
-        B, L, dx = x.shape
-        xMask, mask = applyMask(x, mask_prob=self.mask_prob)
-        assert xMask.shape == (B, L, dx)
-        assert mask.shape == (B, L)
-        z = self.encoder(xMask) # shape: B, L, d
+        # x can be:
+        #   LongTensor  (B, L)     — SMILES token ids
+        #   FloatTensor (B, L, dx) — continuous features (fingerprint chunks etc.)
+        if x.dtype == torch.long:
+            B, L = x.shape
+            xMask, mask = applyTokenMask(x, self.mask_prob, self.mask_token_id)
+            # Exclude padding positions from the loss
+            valid = mask & (x != self.pad_token_id)
+        else:
+            B, L, dx = x.shape
+            xMask, mask = applyMask(x, mask_prob=self.mask_prob)
+            valid = mask
+
+        z = self.encoder(xMask)                                    # (B, L, d)
         with torch.no_grad():
-            z_hat, z_teacher_layers = self.teacher(x, return_all_layers=True) # z_hat.shape: B, L, d
-        d = z.shape[2]
-        assert z.shape == z_hat.shape
-        assert z.shape == (B, L, d)
+            _, z_teacher_layers = self.teacher(x, return_all_layers=True)
+
         loss = 0
         for k in self.K_layers:
             z_layer = z_teacher_layers[k]
-            y = self.codebooks[str(k)].findMostSimilarInCodebook(z_layer) # shape: (B, L). values in range 0, ..., V-1
+            y = self.codebooks[str(k)].findMostSimilarInCodebook(z_layer)  # (B, L)
             if update_codebooks:
                 self.codebooks[str(k)].update(y, z_layer.detach())
-            logits = self.heads[str(k)](z)
+            logits   = self.heads[str(k)](z)
             log_probs = F.log_softmax(logits, dim=-1)
-            log_phi = log_probs.gather(dim=2, index=y.unsqueeze(-1)).squeeze(-1)
-            # probs = self.heads[k](z) # B,L,V 
-            # p_phi = probs.gather(dim=2, index=y.unsqueeze(-1)).squeeze(-1) # B,L
-            # log_phi = torch.log(p_phi)
-            num_masked = mask.sum().clamp(min=1)
-            loss -= log_phi[mask].sum() / num_masked
+            log_phi  = log_probs.gather(dim=2, index=y.unsqueeze(-1)).squeeze(-1)
+            num_valid = valid.sum().clamp(min=1)
+            loss -= log_phi[valid].sum() / num_valid
         return loss
     
     def forward(self, x):

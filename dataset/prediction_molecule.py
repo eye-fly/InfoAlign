@@ -48,7 +48,7 @@ class PredictionMoleculeDataset(object):
 
         super(PredictionMoleculeDataset, self).__init__()
         if transform == "smiles":
-            self.prepare_smiles()
+            self.prepare_smiles_tokenized()
         elif transform == "fingerprint":
             self.prepare_fingerprints()
 
@@ -115,6 +115,41 @@ class PredictionMoleculeDataset(object):
             subset, _ = train_test_split(indices, train_size=ratio, random_state=seed, shuffle=True, stratify=None)
 
         return torch.tensor(subset, dtype=torch.long)
+
+    def prepare_smiles_tokenized(self, max_len=128):
+        assert os.path.exists(self.raw_data), f"{self.raw_data} does not exist"
+
+        processed_dir = osp.join(self.folder, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}.pt")
+
+        if osp.exists(cache_path):
+            x_list, y_list, vocab = torch.load(cache_path, weights_only=False)
+        else:
+            from .smiles_tokenizer import build_vocab, encode
+            print("Tokenizing SMILES...")
+            data_df = pd.read_csv(self.raw_data)
+            smiles_list = data_df["smiles"].tolist()
+            vocab = build_vocab(smiles_list)
+
+            x_list, y_list = [], []
+            for _, row in data_df.iterrows():
+                ids, _ = encode(row["smiles"], vocab, max_len)
+                x_list.append(ids)
+                y = torch.tensor([float(row.iloc[col]) for col in range(self.start_column, len(row))], dtype=torch.float32)
+                y_list.append(y)
+
+            x_list = torch.stack(x_list)
+            y_list = torch.stack(y_list)
+            torch.save((x_list, y_list, vocab), cache_path)
+
+        self.data   = x_list
+        self.labels = y_list
+        self.vocab         = vocab
+        self.vocab_size    = len(vocab)
+        self.pad_token_id  = vocab['<pad>']
+        self.mask_token_id = vocab['<mask>']
+        self.max_smiles_len = max_len
 
     def prepare_smiles(self):
         assert os.path.exists(

@@ -85,21 +85,14 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             train_loaders["train_iter"] = iter(train_loaders["train_loader"])
             data, targets = next(train_loaders["train_iter"])
 
-        data = data.to(device, dtype=torch.float32)
+        # Keep LongTensor (SMILES token ids) as-is; cast float features to float32.
+        if data.dtype == torch.long:
+            data = data.to(device)
+        else:
+            data = data.to(device, dtype=torch.float32)
         targets = targets.to(device, dtype=torch.float32)
-        print(f"DEBUG: data.shape={data.shape}; targets.shape={targets.shape}")
 
-        # is_labeled = targets == targets
-        # valid_data = data[is_labeled] # Sometimes it doesn't work, for sure. TODO - fix
-        # is_labeled = torch.any(~torch.isnan(targets), dim=1)  # [B]
-        # valid_data = data[is_labeled]                         # [B', L, dx]
-        valid_data = data # THIS is encoder, it does not use targets - so we can skip it probably.
-        # assert len(inputs.shape) == 3 # B,L,dx # TODO check shape
-        if len(valid_data.shape) == 2:
-            # Our shape is (batchSize,fingerprint_dim). Let`s pretend, that
-            # B=1,L=batchSize,dx=fingerprint_dim. It is bad, because we say that batch size is 1, semantics is broken.
-            # TODO: think about some better solution. 
-            valid_data = valid_data.unsqueeze(0)
+        valid_data = data  # encoder does not use targets
 
         loss = encoder.loss(valid_data, update_codebooks=True)
         loss.backward()
