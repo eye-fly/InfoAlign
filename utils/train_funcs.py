@@ -64,7 +64,7 @@ def train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch):
 ###### ENCODER Part ######### TODO
 ######################################################
 
-def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch):
+def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25):
     # if args.task_type == "regression":
         # criterion = reg_criterion
     # else:
@@ -80,35 +80,36 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         # encoder.zero_grad()
         optimizer.zero_grad() # Some encoder parameters do not have gradients - we only want to zero out optimizer parameters.
         try:
-            data, targets = next(train_loaders["train_iter"])
+            batch = next(train_loaders["train_iter"])
         except:
             train_loaders["train_iter"] = iter(train_loaders["train_loader"])
-            data, targets = next(train_loaders["train_iter"])
+            batch = next(train_loaders["train_iter"])
 
-        # Keep LongTensor (SMILES token ids) as-is; cast float features to float32.
+        if len(batch) == 3:
+            data, fingerprints, targets = batch
+            fingerprints = fingerprints.to(device, dtype=torch.float32)
+        else:
+            data, targets = batch
+            fingerprints = None
+
         if data.dtype == torch.long:
             data = data.to(device)
         else:
             data = data.to(device, dtype=torch.float32)
         targets = targets.to(device, dtype=torch.float32)
 
-        valid_data = data  # encoder does not use targets
+        enc_loss = encoder.loss(data, update_codebooks=True)
+        if decoder is not None and fingerprints is not None:
+            z = encoder(data)
+            dec_loss = decoder.loss(z, fingerprints)
+            loss = enc_loss + decoder_lambda * dec_loss
+        else:
+            loss = enc_loss
 
-        loss = encoder.loss(valid_data, update_codebooks=True)
         loss.backward()
         optimizer.step()
         scheduler.step()
         encoder.update_teacher()
-
-        # preds = model(data)
-        # loss = criterion(
-        #     preds.view(targets.size()).to(torch.float32)[is_labeled],
-        #     targets[is_labeled],
-        # ).mean()
-
-        # loss.backward()
-        # optimizer.step()
-        # scheduler.step()
         losses.update(loss.item())
         batch_time.update(time.time() - end)
         if not args.no_print:

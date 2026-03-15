@@ -151,6 +151,20 @@ class PredictionMoleculeDataset(object):
         self.mask_token_id = vocab['<mask>']
         self.max_smiles_len = max_len
 
+        # Load fingerprints as decoder targets (same molecule order as SMILES).
+        fp_cache = osp.join(processed_dir, "processed_fp.pt")
+        if osp.exists(fp_cache):
+            fps, _ = torch.load(fp_cache, weights_only=False)
+        else:
+            from rdkit import Chem
+            from rdkit.Chem import AllChem
+            data_df = pd.read_csv(self.raw_data)
+            fps = torch.stack([
+                torch.tensor(list(AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(row["smiles"]), 2)), dtype=torch.float32)
+                for _, row in data_df.iterrows()
+            ])
+        self.fingerprints = fps
+
     def prepare_smiles(self):
         assert os.path.exists(
             self.raw_data
@@ -211,6 +225,8 @@ class PredictionMoleculeDataset(object):
         self.labels = y_list
 
     def __getitem__(self, idx):
+        if hasattr(self, "fingerprints"):
+            return self.data[idx], self.fingerprints[idx], self.labels[idx]
         return self.data[idx], self.labels[idx]
 
     def __len__(self):

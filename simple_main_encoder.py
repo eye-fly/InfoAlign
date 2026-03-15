@@ -18,6 +18,7 @@ from dataset.create_datasets import get_data
 from utils.train_funcs import train_one_epoch_only_encoder
 # from models.mlp import MLP
 from models.encoder import Encoder
+from models.decoder import FingerprintDecoder
 
 
 def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps,
@@ -68,13 +69,18 @@ def main(args, seed):
         mask_token_id=dataset.mask_token_id,
         pad_token_id=dataset.pad_token_id,
     ).to(device)
-    optimizer = optim.Adam(encoder.student_params(), lr=args.lr, weight_decay=args.wdecay)
+    decoder = FingerprintDecoder(d=256).to(device)
+
+    optimizer = optim.Adam(
+        list(encoder.student_params()) + list(decoder.parameters()),
+        lr=args.lr, weight_decay=args.wdecay,
+    )
     scheduler = get_cosine_schedule_with_warmup(optimizer, 0, args.epochs * args.steps)
 
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
     best_valid, best_test, best_train, best_epoch, best_params = None, None, None, 0, None
     for epoch in range(args.epochs):
-        train_loaders, avg_loss = train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch)
+        train_loaders, avg_loss = train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder)
         print("Encoder loss:", avg_loss)
     #     valid_perf = validate(args, model, valid_loader)
 

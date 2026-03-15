@@ -310,6 +310,18 @@ class Encoder(nn.Module):
             for k in self.K_layers
         })
     
+    @torch.no_grad()
+    def codebook_stats(self):
+        """Returns active codeword count and assignment entropy per K layer."""
+        stats = {}
+        for k in self.K_layers:
+            n = self.codebooks[str(k)].n.squeeze(-1)  # (V,)
+            active = (n > 1.0).sum().item()
+            p = n / (n.sum() + 1e-8)
+            entropy = -(p * (p + 1e-8).log()).sum().item()
+            stats[k] = {"active": active, "entropy": round(entropy, 3)}
+        return stats
+
     def student_params(self):
         return itertools.chain(
             self.encoder.parameters(),
