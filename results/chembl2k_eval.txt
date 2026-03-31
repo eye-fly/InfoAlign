@@ -7,8 +7,12 @@
 Model                                       valid    test    seeds
 ----------------------------------------------------------
 MLP on Morgan fingerprints                  0.8393   0.7855  5
+Pretrain 156k (30ep SMILES) +
+  joint finetune 200ep (SMILES+GE+head)    0.8148   0.7721  1   ← NEW
 Joint training (encoder+GE decoder+head,
   drop=0.5, lr=3e-4, 250ep)                0.8206   0.7665  1
+Joint training (SMILES decoder,
+  no pretrain, 250ep)                      0.8298   0.7677  1
 Random encoder + frozen head               0.7991   0.7765  5
 Pretrained encoder (60ep, GE decoder)
   + frozen head                             0.7839   0.7629  1
