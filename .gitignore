@@ -91,3 +91,5 @@ coverage.xml
 **/pretrain*
 **/*.zip
 requirements copy.txt
+# auto-generated outputs
+output/

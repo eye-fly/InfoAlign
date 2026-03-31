@@ -64,7 +64,7 @@ def train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch):
 ###### ENCODER Part ######### TODO
 ######################################################
 
-def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25):
+def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25, ge_decoder=None, ge_lambda=0.25):
     # if args.task_type == "regression":
         # criterion = reg_criterion
     # else:
@@ -85,26 +85,19 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             train_loaders["train_iter"] = iter(train_loaders["train_loader"])
             batch = next(train_loaders["train_iter"])
 
-        if len(batch) == 3:
-            data, fingerprints, targets = batch
-            fingerprints = fingerprints.to(device, dtype=torch.float32)
-        else:
-            data, targets = batch
-            fingerprints = None
-
-        if data.dtype == torch.long:
-            data = data.to(device)
-        else:
-            data = data.to(device, dtype=torch.float32)
-        targets = targets.to(device, dtype=torch.float32)
+        data, fingerprints, ge, targets = batch
+        data        = data.to(device)
+        fingerprints = fingerprints.to(device, dtype=torch.float32)
+        ge          = ge.to(device, dtype=torch.float32)
+        targets     = targets.to(device, dtype=torch.float32)
 
         enc_loss = encoder.loss(data, update_codebooks=True)
-        if decoder is not None and fingerprints is not None:
-            z = encoder(data)
-            dec_loss = decoder.loss(z, fingerprints)
-            loss = enc_loss + decoder_lambda * dec_loss
-        else:
-            loss = enc_loss
+        z = encoder(data)
+        loss = enc_loss
+        if decoder is not None:
+            loss = loss + decoder_lambda * decoder.loss(z, fingerprints)
+        if ge_decoder is not None:
+            loss = loss + ge_lambda * ge_decoder.loss(z, ge)
 
         loss.backward()
         optimizer.step()

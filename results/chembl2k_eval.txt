@@ -6,12 +6,23 @@
 
 Model                                       valid    test
 ----------------------------------------------------------
+MLP on Morgan fingerprints (5-seed mean)    0.8393   0.7855
 Random encoder + frozen head                0.7855   0.7732
+Pretrained encoder (60ep, GE decoder)
+  + frozen head                             0.7839   0.7629
 Pretrained encoder (60ep, no decoder)
   + frozen head                             0.7809   0.7370
 ----------------------------------------------------------
 
+MLP per-seed breakdown (main.py, 5 seeds):
+  seed 0: valid 0.8350  test 0.7862
+  seed 1: valid 0.8408  test 0.7923
+  seed 2: valid 0.8432  test 0.7875
+  seed 3: valid 0.8461  test 0.7804
+  seed 4: valid 0.8315  test 0.7813
+
 findings:
+  MLP on Morgan fingerprints = 0.7855 mean test AUC
   Pretraining is worse vs random init (-0.036 test AUC).
   Confirms encoder collapse — 60 epochs of self-supervised training without
   a reconstruction decoder produces representations no better than random.

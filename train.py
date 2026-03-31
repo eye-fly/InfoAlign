@@ -29,7 +29,7 @@ from sklearn.metrics import roc_auc_score
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
 from models.encoder import Encoder
-from models.decoder import FingerprintDecoder
+from models.decoder import FingerprintDecoder, GEDecoder
 from models.classification_head import ClassificationHead
 from utils.train_funcs import train_one_epoch_only_encoder
 
@@ -62,10 +62,12 @@ def roc_auc_eval(encoder, head, loader, device):
     return float(np.mean(scores))
 
 
-def pretrain(encoder, decoder, train_loader, args, epochs, device):
+def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
     params = list(encoder.student_params())
     if decoder is not None:
         params += list(decoder.parameters())
+    if ge_decoder is not None:
+        params += list(ge_decoder.parameters())
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
     scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
@@ -75,7 +77,8 @@ def pretrain(encoder, decoder, train_loader, args, epochs, device):
     print(f"{'='*50}")
     for epoch in range(epochs):
         train_loaders, loss = train_one_epoch_only_encoder(
-            args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder
+            args, encoder, train_loaders, optimizer, scheduler, epoch,
+            decoder=decoder, ge_decoder=ge_decoder,
         )
         stats = encoder.codebook_stats()
         ent = np.mean([s["entropy"] for s in stats.values()])
@@ -137,6 +140,7 @@ def main():
     parser.add_argument("--num-workers",     type=int,   default=0)
     parser.add_argument("--no-freeze",       action="store_true", help="finetune encoder end-to-end")
     parser.add_argument("--with-decoder",    action="store_true", help="use fingerprint decoder during pretraining")
+    parser.add_argument("--with-ge-decoder", action="store_true", help="use gene expression decoder during pretraining")
     parser.add_argument("--no-print",        action="store_true")
     parser.add_argument("--subset-ratio",    type=float, default=1.0)
     cli = parser.parse_args()
@@ -176,16 +180,18 @@ def main():
         vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_token_id, pad_token_id=dataset.pad_token_id,
     ).to(device)
 
-    decoder = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
-    head    = ClassificationHead(d=256, num_tasks=dataset.num_tasks).to(device)
+    decoder    = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
+    ge_decoder = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
+    head       = ClassificationHead(d=256, num_tasks=dataset.num_tasks).to(device)
 
     print(f"Device: {device}")
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
-    print(f"Decoder: {'FingerprintDecoder' if decoder else 'none'}  |  Freeze encoder: {not cli.no_freeze}")
+    decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None])) or "none"
+    print(f"Decoders: {decoders_str}  |  Freeze encoder: {not cli.no_freeze}")
 
     if cli.pretrain_epochs > 0:
-        pretrain(encoder, decoder, train_loader, args, cli.pretrain_epochs, device)
+        pretrain(encoder, decoder, ge_decoder, train_loader, args, cli.pretrain_epochs, device)
 
     best_valid, best_test = finetune(
         encoder, head, train_loader, valid_loader, test_loader,
