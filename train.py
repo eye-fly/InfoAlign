@@ -28,10 +28,12 @@ from sklearn.metrics import roc_auc_score
 
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
+from dataset.pretrain_smiles import PretrainSMILESDataset
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
 from models.classification_head import ClassificationHead
 from utils.train_funcs import train_one_epoch_only_encoder
+from utils.misc import AverageMeter
 
 
 def get_cosine_schedule(optimizer, total_steps):
@@ -76,13 +78,15 @@ def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
     print(f"Pretraining encoder for {epochs} epochs")
     print(f"{'='*50}")
     for epoch in range(epochs):
-        train_loaders, loss = train_one_epoch_only_encoder(
+        train_loaders, loss, components = train_one_epoch_only_encoder(
             args, encoder, train_loaders, optimizer, scheduler, epoch,
             decoder=decoder, ge_decoder=ge_decoder,
         )
         stats = encoder.codebook_stats()
-        ent = np.mean([s["entropy"] for s in stats.values()])
-        print(f"  epoch {epoch+1:>3}/{epochs}  loss={loss:.4f}  codebook_entropy={ent:.3f}")
+        ent   = np.mean([s["entropy"] for s in stats.values()])
+        act   = int(np.mean([s["active"]  for s in stats.values()]))
+        comp_str = "  ".join(f"{k}={v:.3f}" for k, v in components.items())
+        print(f"  epoch {epoch+1:>3}/{epochs}  total={loss:.3f}  [{comp_str}]  entropy={ent:.3f}  active={act}/512")
 
 
 def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader, args, epochs, device,
@@ -103,6 +107,9 @@ def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_l
     for epoch in range(epochs):
         encoder.train()
         head.train()
+        enc_m = AverageMeter(); cls_m = AverageMeter()
+        ge_m  = AverageMeter(); smi_m = AverageMeter()
+
         for batch in train_loader:
             data, fingerprints, ge, targets = batch
             data    = data.to(device)
@@ -115,10 +122,17 @@ def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_l
             z = encoder(data)
             cls_loss = head.loss(z, targets)
             loss = enc_loss + cls_loss
+            enc_m.update(enc_loss.item()); cls_m.update(cls_loss.item())
+
             if ge_decoder is not None:
-                loss = loss + ge_lambda * ge_decoder.loss(z, ge)
+                ge_l = ge_decoder.loss(z, ge)
+                loss = loss + ge_lambda * ge_l
+                ge_m.update(ge_l.item())
             if use_smiles:
-                loss = loss + smiles_lambda * smiles_decoder.loss(z_masked, mask, x_orig)
+                smi_l = smiles_decoder.loss(z_masked, mask, x_orig)
+                loss = loss + smiles_lambda * smi_l
+                smi_m.update(smi_l.item())
+
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -130,11 +144,13 @@ def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_l
             best_test = roc_auc_eval(encoder, head, test_loader, device)
             best_epoch = epoch + 1
 
-        if (epoch + 1) % 10 == 0:
-            print(f"  epoch {epoch+1:>3}/{epochs}  valid={valid_auc:.4f}  best_valid={best_valid:.4f}  best_test={best_test:.4f}")
-
-    print(f"\n  Best epoch {best_epoch}: valid={best_valid:.4f}  test={best_test:.4f}")
-    return best_valid, best_test
+        stats = encoder.codebook_stats()
+        ent = np.mean([s["entropy"] for s in stats.values()])
+        act = int(np.mean([s["active"] for s in stats.values()]))
+        comp = f"enc={enc_m.avg:.3f}  cls={cls_m.avg:.3f}"
+        if ge_m.count > 0:   comp += f"  ge={ge_m.avg:.4f}"
+        if smi_m.count > 0:  comp += f"  smi={smi_m.avg:.3f}"
+        print(f"  epoch {epoch+1:>3}/{epochs}  [{comp}]  entropy={ent:.3f}  active={act}/512  valid={valid_auc:.4f}  best={best_valid:.4f}")
 
 
 def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epochs, freeze_encoder, device):
@@ -195,6 +211,7 @@ def main():
     parser.add_argument("--with-ge-decoder",     action="store_true", help="use gene expression decoder")
     parser.add_argument("--with-smiles-decoder", action="store_true", help="use BERT-style masked token prediction decoder")
     parser.add_argument("--joint",               action="store_true", help="joint training: encoder + decoders + head simultaneously")
+    parser.add_argument("--pretrain-on-pretrain-raw", action="store_true", help="pretrain encoder on pretrain_raw/ (156k) before finetuning on ChEMBL2K")
     parser.add_argument("--no-print",        action="store_true")
     parser.add_argument("--subset-ratio",    type=float, default=1.0)
     cli = parser.parse_args()
@@ -217,7 +234,30 @@ def main():
     args.gpu_id      = cli.gpu_id
 
     torch.manual_seed(0)
+
+    # Load finetune dataset — if pretraining on pretrain_raw/, build combined vocab first
+    if cli.pretrain_on_pretrain_raw:
+        import pandas as pd
+        finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
+        pretrain_ds = PretrainSMILESDataset(root="./raw_data", finetune_smiles=finetune_smiles)
+        # Re-tokenize ChEMBL2K with the combined vocab (invalidate old cache)
+        chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
+        if os.path.exists(chembl_cache):
+            _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
+            if len(cached_vocab) != len(pretrain_ds.vocab):
+                print("Vocab size changed — invalidating ChEMBL2K cache...")
+                os.remove(chembl_cache)
+        args._vocab_override = pretrain_ds.vocab
+
     dataset = get_data(args, "./raw_data", transform="smiles")
+
+    # Inject combined vocab into dataset if pretraining
+    if cli.pretrain_on_pretrain_raw:
+        dataset.vocab        = pretrain_ds.vocab
+        dataset.vocab_size   = pretrain_ds.vocab_size
+        dataset.pad_token_id = pretrain_ds.pad_token_id
+        dataset.mask_token_id = pretrain_ds.mask_token_id
+
     split   = dataset.get_idx_split()
 
     args.num_trained = len(split["train"])
@@ -228,10 +268,14 @@ def main():
     valid_loader = DataLoader(Subset(dataset, split["valid"]), batch_size=cli.batch_size, shuffle=False, num_workers=cli.num_workers)
     test_loader  = DataLoader(Subset(dataset, split["test"]),  batch_size=cli.batch_size, shuffle=False, num_workers=cli.num_workers)
 
+    vocab_size = pretrain_ds.vocab_size if cli.pretrain_on_pretrain_raw else dataset.vocab_size
+    pad_id     = pretrain_ds.pad_token_id if cli.pretrain_on_pretrain_raw else dataset.pad_token_id
+    mask_id    = pretrain_ds.mask_token_id if cli.pretrain_on_pretrain_raw else dataset.mask_token_id
+
     encoder = Encoder(
         V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
         gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
-        vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_token_id, pad_token_id=dataset.pad_token_id,
+        vocab_size=vocab_size, mask_token_id=mask_id, pad_token_id=pad_id,
     ).to(device)
 
     decoder        = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
@@ -245,6 +289,12 @@ def main():
     decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None, "SMILES" if smiles_decoder else None])) or "none"
     mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
     print(f"Decoders: {decoders_str}  |  Mode: {mode}")
+
+    if cli.pretrain_on_pretrain_raw:
+        pretrain_loader = DataLoader(pretrain_ds, batch_size=cli.batch_size, shuffle=True, num_workers=cli.num_workers)
+        args.steps = len(pretrain_ds) // cli.batch_size + 1
+        pretrain(encoder, decoder, ge_decoder if not cli.joint else None, pretrain_loader, args, cli.pretrain_epochs, device)
+        args.steps = args.num_trained // args.batch_size + 1  # reset for finetune
 
     if cli.joint:
         best_valid, best_test = joint_train(
