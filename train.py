@@ -29,7 +29,7 @@ from sklearn.metrics import roc_auc_score
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
 from models.encoder import Encoder
-from models.decoder import FingerprintDecoder, GEDecoder
+from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
 from models.classification_head import ClassificationHead
 from utils.train_funcs import train_one_epoch_only_encoder
 
@@ -83,6 +83,58 @@ def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
         stats = encoder.codebook_stats()
         ent = np.mean([s["entropy"] for s in stats.values()])
         print(f"  epoch {epoch+1:>3}/{epochs}  loss={loss:.4f}  codebook_entropy={ent:.3f}")
+
+
+def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader, args, epochs, device,
+                ge_lambda=0.25, smiles_lambda=0.25):
+    params = list(encoder.student_params()) + list(head.parameters())
+    if ge_decoder is not None:
+        params += list(ge_decoder.parameters())
+    if smiles_decoder is not None:
+        params += list(smiles_decoder.parameters())
+    optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
+    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+
+    print(f"\n{'='*50}")
+    print(f"Joint training (encoder + GE decoder + head) for {epochs} epochs")
+    print(f"{'='*50}")
+
+    best_valid, best_test, best_epoch = 0.0, 0.0, 0
+    for epoch in range(epochs):
+        encoder.train()
+        head.train()
+        for batch in train_loader:
+            data, fingerprints, ge, targets = batch
+            data    = data.to(device)
+            ge      = ge.to(device, dtype=torch.float32)
+            targets = targets.to(device, dtype=torch.float32)
+
+            optimizer.zero_grad()
+            use_smiles = smiles_decoder is not None and data.dtype == torch.long
+            enc_loss, z_masked, mask, x_orig = encoder.loss(data, update_codebooks=True, return_masked_info=True)
+            z = encoder(data)
+            cls_loss = head.loss(z, targets)
+            loss = enc_loss + cls_loss
+            if ge_decoder is not None:
+                loss = loss + ge_lambda * ge_decoder.loss(z, ge)
+            if use_smiles:
+                loss = loss + smiles_lambda * smiles_decoder.loss(z_masked, mask, x_orig)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            encoder.update_teacher()
+
+        valid_auc = roc_auc_eval(encoder, head, valid_loader, device)
+        if valid_auc > best_valid:
+            best_valid = valid_auc
+            best_test = roc_auc_eval(encoder, head, test_loader, device)
+            best_epoch = epoch + 1
+
+        if (epoch + 1) % 10 == 0:
+            print(f"  epoch {epoch+1:>3}/{epochs}  valid={valid_auc:.4f}  best_valid={best_valid:.4f}  best_test={best_test:.4f}")
+
+    print(f"\n  Best epoch {best_epoch}: valid={best_valid:.4f}  test={best_test:.4f}")
+    return best_valid, best_test
 
 
 def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epochs, freeze_encoder, device):
@@ -140,7 +192,9 @@ def main():
     parser.add_argument("--num-workers",     type=int,   default=0)
     parser.add_argument("--no-freeze",       action="store_true", help="finetune encoder end-to-end")
     parser.add_argument("--with-decoder",    action="store_true", help="use fingerprint decoder during pretraining")
-    parser.add_argument("--with-ge-decoder", action="store_true", help="use gene expression decoder during pretraining")
+    parser.add_argument("--with-ge-decoder",     action="store_true", help="use gene expression decoder")
+    parser.add_argument("--with-smiles-decoder", action="store_true", help="use BERT-style masked token prediction decoder")
+    parser.add_argument("--joint",               action="store_true", help="joint training: encoder + decoders + head simultaneously")
     parser.add_argument("--no-print",        action="store_true")
     parser.add_argument("--subset-ratio",    type=float, default=1.0)
     cli = parser.parse_args()
@@ -180,26 +234,33 @@ def main():
         vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_token_id, pad_token_id=dataset.pad_token_id,
     ).to(device)
 
-    decoder    = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
-    ge_decoder = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
-    head       = ClassificationHead(d=256, num_tasks=dataset.num_tasks).to(device)
+    decoder        = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
+    ge_decoder     = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
+    smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
+    head           = ClassificationHead(d=256, num_tasks=dataset.num_tasks).to(device)
 
     print(f"Device: {device}")
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
-    decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None])) or "none"
-    print(f"Decoders: {decoders_str}  |  Freeze encoder: {not cli.no_freeze}")
+    decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None, "SMILES" if smiles_decoder else None])) or "none"
+    mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
+    print(f"Decoders: {decoders_str}  |  Mode: {mode}")
 
-    if cli.pretrain_epochs > 0:
-        pretrain(encoder, decoder, ge_decoder, train_loader, args, cli.pretrain_epochs, device)
-
-    best_valid, best_test = finetune(
-        encoder, head, train_loader, valid_loader, test_loader,
-        args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze, device=device,
-    )
+    if cli.joint:
+        best_valid, best_test = joint_train(
+            encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader,
+            args, cli.finetune_epochs, device=device,
+        )
+    else:
+        if cli.pretrain_epochs > 0:
+            pretrain(encoder, decoder, ge_decoder, train_loader, args, cli.pretrain_epochs, device)
+        best_valid, best_test = finetune(
+            encoder, head, train_loader, valid_loader, test_loader,
+            args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze, device=device,
+        )
 
     os.makedirs("results", exist_ok=True)
-    tag = f"pre{cli.pretrain_epochs}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'dec' if decoder else 'nodec'}"
+    tag = f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'ge' if ge_decoder else 'nodec'}"
     with open(f"results/{tag}.txt", "w") as f:
         f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")
     print(f"\nSaved to results/{tag}.txt")

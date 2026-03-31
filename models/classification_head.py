@@ -9,7 +9,7 @@ class ClassificationHead(nn.Module):
 
     Used to evaluate encoder representation quality on ChEMBL2K's 41 bioactivity tasks.
     """
-    def __init__(self, d, num_tasks, hidden=256, drop_ratio=0.2):
+    def __init__(self, d, num_tasks, hidden=256, drop_ratio=0.5):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(d, hidden),

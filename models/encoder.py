@@ -333,7 +333,7 @@ class Encoder(nn.Module):
         for pt, ps in zip(self.teacher.parameters(), self.encoder.parameters()):
             pt.data.mul_(self.gamma_teacher).add_(ps.data, alpha=1-self.gamma_teacher)
 
-    def loss(self, x, update_codebooks=False):
+    def loss(self, x, update_codebooks=False, return_masked_info=False):
         # x can be:
         #   LongTensor  (B, L)     — SMILES token ids
         #   FloatTensor (B, L, dx) — continuous features (fingerprint chunks etc.)
@@ -362,6 +362,9 @@ class Encoder(nn.Module):
             log_phi  = log_probs.gather(dim=2, index=y.unsqueeze(-1)).squeeze(-1)
             num_valid = valid.sum().clamp(min=1)
             loss -= log_phi[valid].sum() / num_valid
+
+        if return_masked_info:
+            return loss, z, valid, x  # z at all positions, mask of valid masked positions, original tokens
         return loss
     
     def forward(self, x):
