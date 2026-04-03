@@ -15,12 +15,17 @@ class FingerprintDecoder(nn.Module):
             nn.Linear(hidden, fp_dim),
         )
 
-    def forward(self, z):
-        # z: (B, L, d) → mean pool over sequence → (B, d) → (B, fp_dim)
-        return self.net(z.mean(dim=1))
+    def forward(self, z, pad_mask=None):
+        # z: (B, L, d) → masked mean pool over sequence → (B, d) → (B, fp_dim)
+        if pad_mask is not None:
+            mask = pad_mask.unsqueeze(-1).float()  # (B, L, 1)
+            pooled = (z * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+        else:
+            pooled = z.mean(dim=1)
+        return self.net(pooled)
 
-    def loss(self, z, fingerprint):
-        logits = self.forward(z)
+    def loss(self, z, fingerprint, pad_mask=None):
+        logits = self.forward(z, pad_mask=pad_mask)
         return F.binary_cross_entropy_with_logits(logits, fingerprint)
 
 
