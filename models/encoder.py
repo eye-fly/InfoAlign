@@ -1,5 +1,6 @@
 # import numpy as np
 # import pandas as pd
+import math
 import torch
 import random
 import torch.nn as nn
@@ -149,7 +150,7 @@ class Block(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self, dx, d_model, num_heads, num_layers, vocab_size=None, pad_token_id=0):
+    def __init__(self, dx, d_model, num_heads, num_layers, vocab_size=None, pad_token_id=0, max_len=512):
         super().__init__()
         if vocab_size is not None:
             # SMILES / token sequence mode: input is (B, L) LongTensor
@@ -160,6 +161,8 @@ class Transformer(nn.Module):
             self.embedding  = None
             self.input_proj = nn.Linear(dx, d_model)
 
+        self.position_embedding = nn.Embedding(max_len, d_model)
+
         self.blocks = nn.ModuleList(
             [Block(d_model, num_heads) for _ in range(num_layers)]
         )
@@ -169,6 +172,9 @@ class Transformer(nn.Module):
             output = self.embedding(input_ids)   # (B, L) -> (B, L, d_model)
         else:
             output = self.input_proj(input_ids)  # (B, L, dx) -> (B, L, d_model)
+
+        positions = torch.arange(output.size(1), device=output.device).unsqueeze(0)
+        output = output + self.position_embedding(positions)
 
         all_layers = []
         for block in self.blocks:
@@ -283,7 +289,7 @@ class PseudoLabelPredictionHead(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, V, dx, d, num_heads, num_layers, K_layers,
-                 gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
+                 gamma_teacher=0.996, gamma_codebook=0.99, mask_prob=0.15,
                  vocab_size=None, mask_token_id=None, pad_token_id=0):
         super().__init__()
         assert gamma_teacher <= 1. and gamma_teacher >= 0.
