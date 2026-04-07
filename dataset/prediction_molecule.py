@@ -10,7 +10,7 @@ from .data_utils import scaffold_split
 
 
 class PredictionMoleculeDataset(object):
-    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint"):
+    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None):
         assert transform in [
             "fingerprint",
             "smiles",
@@ -48,7 +48,7 @@ class PredictionMoleculeDataset(object):
 
         super(PredictionMoleculeDataset, self).__init__()
         if transform == "smiles":
-            self.prepare_smiles_tokenized()
+            self.prepare_smiles_tokenized(vocab=vocab)
         elif transform == "fingerprint":
             self.prepare_fingerprints()
 
@@ -116,21 +116,26 @@ class PredictionMoleculeDataset(object):
 
         return torch.tensor(subset, dtype=torch.long)
 
-    def prepare_smiles_tokenized(self, max_len=128):
+    def prepare_smiles_tokenized(self, max_len=128, vocab=None):
         assert os.path.exists(self.raw_data), f"{self.raw_data} does not exist"
 
         processed_dir = osp.join(self.folder, "processed")
         os.makedirs(processed_dir, exist_ok=True)
-        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}.pt")
+
+        # If an external vocab is provided, always re-tokenise with it
+        # (the cached file was tokenised with the dataset's own vocab).
+        suffix = "_extv" if vocab is not None else ""
+        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}{suffix}.pt")
 
         if osp.exists(cache_path):
             x_list, y_list, vocab = torch.load(cache_path, weights_only=False)
         else:
-            from .smiles_tokenizer import build_vocab, encode
+            from .smiles_tokenizer import build_vocab as _build_vocab, encode
             print("Tokenizing SMILES...")
             data_df = pd.read_csv(self.raw_data)
             smiles_list = data_df["smiles"].tolist()
-            vocab = build_vocab(smiles_list)
+            if vocab is None:
+                vocab = _build_vocab(smiles_list)
 
             x_list, y_list = [], []
             for _, row in data_df.iterrows():
