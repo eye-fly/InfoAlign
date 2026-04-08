@@ -58,6 +58,9 @@ def roc_auc_eval(encoder, head, loader, device):
     trues = torch.cat(trues)
     import torch.distributed as dist
     if dist.is_initialized():
+        # NCCL requires all tensors to be on the GPU for all_gather.
+        preds = preds.to(device)
+        trues = trues.to(device)
         gathered_preds = [torch.zeros_like(preds) for _ in range(dist.get_world_size())]
         gathered_trues = [torch.zeros_like(trues) for _ in range(dist.get_world_size())]
         dist.all_gather(gathered_preds, preds)
@@ -65,8 +68,8 @@ def roc_auc_eval(encoder, head, loader, device):
         preds = torch.cat(gathered_preds)
         trues = torch.cat(gathered_trues)
 
-    preds = preds.numpy()
-    trues = trues.numpy()
+    preds = preds.cpu().numpy()
+    trues = trues.cpu().numpy()
     scores = []
     for i in range(trues.shape[1]):
         mask = ~np.isnan(trues[:, i])
