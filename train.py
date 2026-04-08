@@ -387,7 +387,7 @@ def main():
     print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
     if cli.load_pretrained:
-        encoder.load_state_dict(torch.load(cli.load_pretrained, map_location=device))
+        unwrap(encoder).load_state_dict(torch.load(cli.load_pretrained, map_location=device))
         print(f"Loaded pretrained encoder from {cli.load_pretrained}")
 
     if cli.pretrain_on_pretrain_raw:
