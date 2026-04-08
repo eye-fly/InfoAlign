@@ -226,7 +226,7 @@ def applyMaskWithSpans(x, mask_ratio=0.5, mask_span=10):
                         break
 
     x_masked = x.clone()
-    x_masked[mask] = 0.0  # lepiej: learned mask embedding
+    x_masked[mask] = 0.0  # better: learned mask embedding
 
     return x_masked, mask
 
