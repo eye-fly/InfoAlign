@@ -276,6 +276,10 @@ def main():
 
     torch.manual_seed(0)
 
+    # Ensure only rank 0 downloads/processes dataset and invalidates the cache first
+    if local_rank > 0 and dist.is_initialized():
+        dist.barrier()
+
     # Load finetune dataset — build combined vocab if using pretrain_raw/ (either pretraining or loading checkpoint)
     need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
     if need_pretrain_vocab:
@@ -285,13 +289,19 @@ def main():
         # Re-tokenize ChEMBL2K with the combined vocab (invalidate old cache)
         chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
         if os.path.exists(chembl_cache):
-            _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
-            if len(cached_vocab) != len(pretrain_ds.vocab):
-                print("Vocab size changed — invalidating ChEMBL2K cache...")
-                os.remove(chembl_cache)
+            try:
+                _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
+                if len(cached_vocab) != len(pretrain_ds.vocab):
+                    print("Vocab size changed — invalidating ChEMBL2K cache...")
+                    os.remove(chembl_cache)
+            except Exception:
+                pass
         args._vocab_override = pretrain_ds.vocab
 
     dataset = get_data(args, "./raw_data", transform="smiles")
+
+    if local_rank <= 0 and dist.is_initialized():
+        dist.barrier()
 
     # Inject combined vocab into dataset if using pretrain_raw/ vocab
     if need_pretrain_vocab:
