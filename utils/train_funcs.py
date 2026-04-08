@@ -108,17 +108,17 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         z = encoder(data) if (decoder is not None or ge_decoder is not None) else None
 
         if decoder is not None and fingerprints is not None:
-            fp_l = decoder.loss(z, fingerprints)
+            fp_l = decoder(z, fingerprint=fingerprints)
             loss = loss + decoder_lambda * fp_l
             fp_losses.update(fp_l.item())
 
         if ge_decoder is not None and ge is not None:
-            ge_l = ge_decoder.loss(z, ge)
+            ge_l = ge_decoder(z, ge_targets=ge)
             loss = loss + ge_lambda * ge_l
             ge_losses.update(ge_l.item())
             
         if use_smiles:
-            smi_l = smiles_decoder.loss(z_masked, mask, x_orig)
+            smi_l = smiles_decoder(z_masked, mask=mask, original_tokens=x_orig)
             loss = loss + smiles_lambda * smi_l
             smi_losses.update(smi_l.item())
 
