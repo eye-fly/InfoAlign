@@ -304,21 +304,25 @@ def main():
         import pandas as pd
         finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
         pretrain_ds = PretrainSMILESDataset(root="./raw_data")
-        # Re-tokenize ChEMBL2K with the combined vocab (invalidate old cache)
+        
         chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
         if os.path.exists(chembl_cache):
             try:
                 _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
+                # Only invalidate the old local cache if it doesn't match the pretrain vocab length
                 if len(cached_vocab) != len(pretrain_ds.vocab):
-                    print("Vocab size changed — invalidating ChEMBL2K cache...")
+                    if local_rank <= 0:
+                        print("Vocab size changed — invalidating old local ChEMBL2K cache to align with pretrained vocab!")
                     os.remove(chembl_cache)
             except Exception:
                 pass
         args._vocab_override = pretrain_ds.vocab
 
+    # Rank 0 builds/caches the dataset. Ranks > 0 will instantly load the cached version.
     dataset = get_data(args, "./raw_data", transform="smiles")
 
-    if local_rank <= 0 and dist.is_initialized():
+    # DDP sync: Rank 0 arrives here and releases Ranks > 0 from the barrier above
+    if local_rank == 0 and dist.is_initialized():
         dist.barrier()
 
     # Inject combined vocab into dataset if using pretrain_raw/ vocab
