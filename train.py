@@ -34,7 +34,8 @@ from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
 from models.classification_head import ClassificationHead
 from utils.train_funcs import train_one_epoch_only_encoder
 from utils.misc import AverageMeter
-
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.*')
 
 def get_cosine_schedule(optimizer, total_steps):
     def lr(step):
