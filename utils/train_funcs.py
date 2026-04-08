@@ -64,7 +64,7 @@ def train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch):
 ###### ENCODER Part ######### TODO
 ######################################################
 
-def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25, ge_decoder=None, ge_lambda=0.25):
+def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25, ge_decoder=None, ge_lambda=0.25, smiles_decoder=None, smiles_lambda=0.25):
     if not args.no_print:
         p_bar = tqdm(range(args.steps))
     batch_time = AverageMeter()
@@ -72,6 +72,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
     enc_losses   = AverageMeter()
     fp_losses    = AverageMeter()
     ge_losses    = AverageMeter()
+    smi_losses   = AverageMeter()
     device = args.device
     encoder.train()
     for batch_idx in range(args.steps):
@@ -93,29 +94,42 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             ge           = ge.to(device, dtype=torch.float32)
             targets      = targets.to(device, dtype=torch.float32)
 
-        enc_loss = encoder(data, return_loss=True, update_codebooks=True)
+        use_smiles = smiles_decoder is not None and data.dtype == torch.long
+        enc_out = encoder(data, return_loss=True, update_codebooks=True, return_masked_info=use_smiles)
+        
+        if use_smiles:
+            enc_loss, z_masked, mask, x_orig = enc_out
+        else:
+            enc_loss = enc_out
+            
         loss = enc_loss
         enc_losses.update(enc_loss.item())
 
+        z = encoder(data) if (decoder is not None or ge_decoder is not None) else None
+
         if decoder is not None and fingerprints is not None:
-            z = encoder(data)
-            fp_l = decoder(z, fingerprint=fingerprints)
+            fp_l = decoder.loss(z, fingerprints)
             loss = loss + decoder_lambda * fp_l
             fp_losses.update(fp_l.item())
 
         if ge_decoder is not None and ge is not None:
-            z = encoder(data)
-            ge_l = ge_decoder(z, ge_targets=ge)
+            ge_l = ge_decoder.loss(z, ge)
             loss = loss + ge_lambda * ge_l
             ge_losses.update(ge_l.item())
+            
+        if use_smiles:
+            smi_l = smiles_decoder.loss(z_masked, mask, x_orig)
+            loss = loss + smiles_lambda * smi_l
+            smi_losses.update(smi_l.item())
 
         loss.backward()
         optimizer.step()
         scheduler.step()
-        if hasattr(encoder, "module"):
-            encoder.module.update_teacher()
-        else:
-            encoder.update_teacher()
+        
+        # unwrap encoder before calling update_teacher to avoid DDP errors
+        model = encoder.module if hasattr(encoder, "module") else encoder
+        model.update_teacher()
+        
         total_losses.update(loss.item())
         batch_time.update(time.time() - end)
 
@@ -128,6 +142,8 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
                 desc += f"  fp={fp_losses.avg:.3f}"
             if ge_losses.count > 0:
                 desc += f"  ge={ge_losses.avg:.4f}"
+            if smi_losses.count > 0:
+                desc += f"  smi={smi_losses.avg:.3f}"
             desc += f"  {batch_time.avg*1000:.0f}ms/batch"
             p_bar.set_description(desc)
             p_bar.update()
@@ -140,5 +156,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         component_losses["fp"] = fp_losses.avg
     if ge_losses.count > 0:
         component_losses["ge"] = ge_losses.avg
+    if smi_losses.count > 0:
+        component_losses["smi"] = smi_losses.avg
 
     return train_loaders, total_losses.avg, component_losses
