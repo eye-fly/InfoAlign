@@ -97,6 +97,11 @@ def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
     for epoch in range(epochs):
         if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
+
+        progress = epoch / max(1, epochs - 1)
+        current_mask = args.mask_prob_start + (args.mask_prob_end - args.mask_prob_start) * progress
+        unwrap(encoder).mask_prob = current_mask
+
         train_loaders, loss, components = train_one_epoch_only_encoder(
             args, encoder, train_loaders, optimizer, scheduler, epoch,
             decoder=decoder, ge_decoder=ge_decoder,
@@ -126,6 +131,11 @@ def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_l
     for epoch in range(epochs):
         if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
+            
+        progress = epoch / max(1, epochs - 1)
+        current_mask = args.mask_prob_start + (args.mask_prob_end - args.mask_prob_start) * progress
+        unwrap(encoder).mask_prob = current_mask
+
         encoder.train()
         head.train()
         enc_m = AverageMeter(); cls_m = AverageMeter()
@@ -242,6 +252,8 @@ def main():
     parser.add_argument("--load-pretrained",  default=None, help="load encoder weights from this path instead of pretraining")
     parser.add_argument("--no-print",        action="store_true")
     parser.add_argument("--subset-ratio",    type=float, default=1.0)
+    parser.add_argument("--mask-prob-start", type=float, default=0.15)
+    parser.add_argument("--mask-prob-end",   type=float, default=0.15)
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Type of classification head: small, wide, deep")
     cli = parser.parse_args()
 
@@ -270,6 +282,8 @@ def main():
     args.num_workers = cli.num_workers
     args.no_print    = cli.no_print or (local_rank > 0)
     args.subset_ratio = cli.subset_ratio
+    args.mask_prob_start = cli.mask_prob_start
+    args.mask_prob_end   = cli.mask_prob_end
     args.head_type   = cli.head_type
     args.device      = device
     args.gpu_id      = cli.gpu_id
