@@ -219,6 +219,7 @@ def main():
     parser.add_argument("--load-pretrained",  default=None, help="load encoder weights from this path instead of pretraining")
     parser.add_argument("--no-print",        action="store_true")
     parser.add_argument("--subset-ratio",    type=float, default=1.0)
+    parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Type of classification head: small, wide, deep")
     cli = parser.parse_args()
 
     device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
@@ -233,8 +234,9 @@ def main():
     args.lr          = cli.lr
     args.wdecay      = cli.wdecay
     args.num_workers = cli.num_workers
-    args.no_print    = True
+    args.no_print    = cli.no_print
     args.subset_ratio = cli.subset_ratio
+    args.head_type   = cli.head_type
     args.device      = device
     args.gpu_id      = cli.gpu_id
 
@@ -245,7 +247,7 @@ def main():
     if need_pretrain_vocab:
         import pandas as pd
         finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
-        pretrain_ds = PretrainSMILESDataset(root="./raw_data", finetune_smiles=finetune_smiles)
+        pretrain_ds = PretrainSMILESDataset(root="./raw_data")
         # Re-tokenize ChEMBL2K with the combined vocab (invalidate old cache)
         chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
         if os.path.exists(chembl_cache):
@@ -287,14 +289,14 @@ def main():
     decoder        = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
     ge_decoder     = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
     smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
-    head           = ClassificationHead(d=256, num_tasks=dataset.num_tasks).to(device)
+    head           = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
 
     print(f"Device: {device}")
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
     decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None, "SMILES" if smiles_decoder else None])) or "none"
     mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
-    print(f"Decoders: {decoders_str}  |  Mode: {mode}")
+    print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
     if cli.load_pretrained:
         encoder.load_state_dict(torch.load(cli.load_pretrained, map_location=device))
@@ -303,7 +305,7 @@ def main():
     if cli.pretrain_on_pretrain_raw:
         pretrain_loader = DataLoader(pretrain_ds, batch_size=cli.batch_size, shuffle=True, num_workers=cli.num_workers)
         args.steps = len(pretrain_ds) // cli.batch_size + 1
-        pretrain(encoder, decoder, ge_decoder if not cli.joint else None, pretrain_loader, args, cli.pretrain_epochs, device)
+        pretrain(encoder, decoder, ge_decoder, pretrain_loader, args, cli.pretrain_epochs, device)
         args.steps = args.num_trained // args.batch_size + 1  # reset for finetune
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
@@ -324,7 +326,7 @@ def main():
         )
 
     os.makedirs("results", exist_ok=True)
-    tag = f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'ge' if ge_decoder else 'nodec'}"
+    tag = f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'ge' if ge_decoder else 'nodec'}_{cli.head_type}"
     with open(f"results/{tag}.txt", "w") as f:
         f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")
     print(f"\nSaved to results/{tag}.txt")

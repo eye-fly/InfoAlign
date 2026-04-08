@@ -8,15 +8,45 @@ class ClassificationHead(nn.Module):
     """Mean-pool encoder tokens → MLP → multi-task binary classification.
 
     Used to evaluate encoder representation quality on ChEMBL2K's 41 bioactivity tasks.
+
+    head_type:
+        'small' — original: d→256→num_tasks  (dropout 0.5)
+        'wide'  — wider + less dropout: d→512→num_tasks  (dropout 0.3)
+        'deep'  — wider + deeper: d→512→256→num_tasks  (dropout 0.5)
     """
-    def __init__(self, d, num_tasks, hidden=256, drop_ratio=0.5):
+    def __init__(self, d, num_tasks, head_type="small", drop_ratio=None):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(d, hidden),
-            nn.ReLU(),
-            nn.Dropout(drop_ratio),
-            nn.Linear(hidden, num_tasks),
-        )
+        if head_type == "small":
+            dr = drop_ratio if drop_ratio is not None else 0.5
+            self.net = nn.Sequential(
+                nn.Linear(d, 256),
+                nn.ReLU(),
+                nn.Dropout(dr),
+                nn.Linear(256, num_tasks),
+            )
+        elif head_type == "wide":
+            dr = drop_ratio if drop_ratio is not None else 0.5
+            self.net = nn.Sequential(
+                nn.Linear(d, 512),
+                nn.ReLU(),
+                nn.Dropout(dr),
+                nn.Linear(512, num_tasks),
+            )
+        elif head_type == "deep":
+            dr = drop_ratio if drop_ratio is not None else 0.5
+            self.net = nn.Sequential(
+                nn.Linear(d, 512),
+                nn.GELU(),
+                nn.Dropout(dr),
+                nn.LayerNorm(512),
+                nn.Linear(512, 256),
+                nn.GELU(),
+                nn.Dropout(dr),
+                nn.LayerNorm(256),
+                nn.Linear(256, num_tasks),
+            )
+        else:
+            raise ValueError(f"Unknown head_type: {head_type}")
 
     def forward(self, z, pad_mask=None):
         # z: (B, L, d) → masked mean pool → (B, d) → (B, num_tasks)

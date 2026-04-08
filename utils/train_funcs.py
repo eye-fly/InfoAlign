@@ -117,7 +117,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         batch_time.update(time.time() - end)
 
         if not args.no_print:
-            desc = (f"Epoch {epoch+1}/{args.epochs}  "
+            desc = (f"Epoch {epoch+1}  "
                     f"[{batch_idx+1}/{args.steps}]  "
                     f"loss={total_losses.avg:.3f}  "
                     f"enc={enc_losses.avg:.3f}")
