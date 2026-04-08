@@ -93,26 +93,29 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             ge           = ge.to(device, dtype=torch.float32)
             targets      = targets.to(device, dtype=torch.float32)
 
-        enc_loss = encoder.loss(data, update_codebooks=True)
+        enc_loss = encoder(data, return_loss=True, update_codebooks=True)
         loss = enc_loss
         enc_losses.update(enc_loss.item())
 
         if decoder is not None and fingerprints is not None:
             z = encoder(data)
-            fp_l = decoder.loss(z, fingerprints)
+            fp_l = decoder(z, fingerprint=fingerprints)
             loss = loss + decoder_lambda * fp_l
             fp_losses.update(fp_l.item())
 
         if ge_decoder is not None and ge is not None:
             z = encoder(data)
-            ge_l = ge_decoder.loss(z, ge)
+            ge_l = ge_decoder(z, ge_targets=ge)
             loss = loss + ge_lambda * ge_l
             ge_losses.update(ge_l.item())
 
         loss.backward()
         optimizer.step()
         scheduler.step()
-        encoder.update_teacher()
+        if hasattr(encoder, "module"):
+            encoder.module.update_teacher()
+        else:
+            encoder.update_teacher()
         total_losses.update(loss.item())
         batch_time.update(time.time() - end)
 

@@ -48,7 +48,7 @@ class ClassificationHead(nn.Module):
         else:
             raise ValueError(f"Unknown head_type: {head_type}")
 
-    def forward(self, z, pad_mask=None):
+    def forward(self, z, pad_mask=None, targets=None):
         # z: (B, L, d) → masked mean pool → (B, d) → (B, num_tasks)
         if pad_mask is not None:
             # pad_mask: (B, L) bool, True = real token, False = padding
@@ -56,12 +56,17 @@ class ClassificationHead(nn.Module):
             pooled = (z * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
         else:
             pooled = z.mean(dim=1)
-        return self.net(pooled)
-
-    def loss(self, z, targets, pad_mask=None):
-        logits = self.forward(z, pad_mask=pad_mask)
-        is_labeled = targets == targets  # mask NaN
-        return F.binary_cross_entropy_with_logits(
-            logits[is_labeled],
-            targets[is_labeled],
-        )
+        
+        logits = self.net(pooled)
+        
+        if targets is not None:
+            is_labeled = targets == targets  # mask NaN
+            if is_labeled.any():
+                return F.binary_cross_entropy_with_logits(
+                    logits[is_labeled],
+                    targets[is_labeled],
+                )
+            else:
+                return torch.tensor(0.0, device=logits.device, requires_grad=True)
+            
+        return logits
