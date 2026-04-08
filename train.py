@@ -83,7 +83,7 @@ def unwrap(model):
     return model.module if hasattr(model, "module") else model
 
 
-def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
+def pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, epochs, device):
     if hasattr(train_loader.sampler, "set_epoch"):
         train_loader.sampler.set_epoch(0)
     params = list(unwrap(encoder).student_params())
@@ -91,6 +91,9 @@ def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
         params += list(unwrap(decoder).parameters())
     if ge_decoder is not None:
         params += list(unwrap(ge_decoder).parameters())
+    if smiles_decoder is not None:
+        params += list(unwrap(smiles_decoder).parameters())
+        
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
     scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
@@ -108,7 +111,7 @@ def pretrain(encoder, decoder, ge_decoder, train_loader, args, epochs, device):
 
         train_loaders, loss, components = train_one_epoch_only_encoder(
             args, encoder, train_loaders, optimizer, scheduler, epoch,
-            decoder=decoder, ge_decoder=ge_decoder,
+            decoder=decoder, ge_decoder=ge_decoder, smiles_decoder=smiles_decoder,
         )
         stats = unwrap(encoder).codebook_stats()
         ent   = np.mean([s["entropy"] for s in stats.values()])
@@ -391,7 +394,7 @@ def main():
         pre_sampler = DistributedSampler(pretrain_ds, shuffle=True) if dist.is_initialized() else None
         pretrain_loader = DataLoader(pretrain_ds, batch_size=per_gpu_batch, shuffle=(pre_sampler is None), sampler=pre_sampler, num_workers=cli.num_workers)
         args.steps = len(pretrain_loader)
-        pretrain(encoder, decoder, ge_decoder, pretrain_loader, args, cli.pretrain_epochs, device)
+        pretrain(encoder, decoder, ge_decoder, smiles_decoder, pretrain_loader, args, cli.pretrain_epochs, device)
         args.steps = len(train_loader)  # reset for finetune
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
@@ -406,7 +409,7 @@ def main():
         )
     else:
         if cli.pretrain_epochs > 0:
-            pretrain(encoder, decoder, ge_decoder, train_loader, args, cli.pretrain_epochs, device)
+            pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, cli.pretrain_epochs, device)
         best_valid, best_test = finetune(
             encoder, head, train_loader, valid_loader, test_loader,
             args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze, device=device,
