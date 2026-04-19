@@ -1,13 +1,10 @@
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-import math
 import os
 
-import numpy as np
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Subset
 # from torch.nn.utils import parameters_to_vector, vector_to_parameters # That would be useful actually
 
@@ -15,21 +12,10 @@ from configures.arguments import get_args
 from dataset.create_datasets import get_data
 # from utils import validate, save_prediction
 # from utils.train_funcs import train_one_epoch
-from utils.train_funcs import train_one_epoch_only_encoder
+from utils.train_funcs import train_one_epoch, get_cosine_schedule_with_warmup
 # from models.mlp import MLP
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder
-
-
-def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps,
-                                    num_cycles=7./16., last_epoch=-1):
-    def _lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        no_progress = float(current_step - num_warmup_steps) / \
-            float(max(1, num_training_steps - num_warmup_steps))
-        return max(0, math.cos(math.pi * num_cycles * no_progress))
-    return LambdaLR(optimizer, _lr_lambda, last_epoch)
 
 
 def main(args, seed):
@@ -41,7 +27,7 @@ def main(args, seed):
         device = torch.device("cpu")
     args.device = device
 
-    dataset = get_data(args, "./raw_data", transform="smiles")
+    dataset = get_data(args, "../raw_data", transform="smiles")
     split_idx = dataset.get_idx_split()
 
     if args.subset_ratio < 1.0:
@@ -80,7 +66,7 @@ def main(args, seed):
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
     best_valid, best_test, best_train, best_epoch, best_params = None, None, None, 0, None
     for epoch in range(args.epochs):
-        train_loaders, avg_loss = train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder)
+        train_loaders, avg_loss = train_one_epoch(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder)
         print("Encoder loss:", avg_loss)
     #     valid_perf = validate(args, model, valid_loader)
 

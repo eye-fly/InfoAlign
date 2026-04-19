@@ -43,3 +43,6 @@ utils/train_funcs.py           # Training loop
 configures/arguments.py        # CLI arguments
 configures/finetune.yaml       # Default config
 ```
+
+# TODO
+Consistent training scripts arguments and documentation

@@ -13,16 +13,16 @@ Usage:
 """
 
 import warnings
+
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
-import math
 import os
 import argparse
 
 import numpy as np
 import torch
 import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Subset
 from sklearn.metrics import roc_auc_score
 
@@ -31,14 +31,7 @@ from dataset.create_datasets import get_data
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder
 from models.classification_head import ClassificationHead
-from utils.train_funcs import train_one_epoch_only_encoder
-
-
-def get_cosine_schedule(optimizer, total_steps):
-    def lr(step):
-        p = step / max(1, total_steps)
-        return max(0, math.cos(math.pi * 7 / 16 * p))
-    return LambdaLR(optimizer, lr)
+from utils.train_funcs import train_one_epoch, get_cosine_schedule_with_warmup
 
 
 def roc_auc_eval(encoder, head, loader, device):
@@ -67,14 +60,14 @@ def pretrain(encoder, decoder, train_loader, args, epochs, device):
     if decoder is not None:
         params += list(decoder.parameters())
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
 
     print(f"\n{'='*50}")
     print(f"Pretraining encoder for {epochs} epochs")
     print(f"{'='*50}")
     for epoch in range(epochs):
-        train_loaders, loss = train_one_epoch_only_encoder(
+        train_loaders, loss = train_one_epoch(
             args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder
         )
         stats = encoder.codebook_stats()
@@ -93,7 +86,7 @@ def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epoch
         params = list(head.parameters()) + list(encoder.parameters())
 
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
 
     mode = "frozen encoder" if freeze_encoder else "end-to-end"
     print(f"\n{'='*50}")
@@ -159,7 +152,7 @@ def main():
     args.gpu_id      = cli.gpu_id
 
     torch.manual_seed(0)
-    dataset = get_data(args, "./raw_data", transform="smiles")
+    dataset = get_data(args, "../raw_data", transform="smiles")
     split   = dataset.get_idx_split()
 
     args.num_trained = len(split["train"])
@@ -192,7 +185,7 @@ def main():
         args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze, device=device,
     )
 
-    os.makedirs("results", exist_ok=True)
+    os.makedirs("../results", exist_ok=True)
     tag = f"pre{cli.pretrain_epochs}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'dec' if decoder else 'nodec'}"
     with open(f"results/{tag}.txt", "w") as f:
         f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")

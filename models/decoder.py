@@ -2,10 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 
-__all__ = ["FingerprintDecoder", "CellInpaintingDecoder", "GeneExpressionDecoder"]
-
-from scipy._lib.array_api_compat import torch
-
+__all__ = ["FingerprintDecoder", "SMILESDecoder", "CellInpaintingDecoder", "GeneExpressionDecoder"]
 
 class FingerprintDecoder(nn.Module):
     """Mean-pool encoder tokens → MLP → reconstruct 2048-bit Morgan fingerprint."""
@@ -29,9 +26,33 @@ class FingerprintDecoder(nn.Module):
 
 # TODO
 class SMILESDecoder(nn.Module):
-    def __init__(self):
+    """Mean-pool encoder tokens → MLP → reconstruct SMILES."""
+    def __init__(self, d, vocab_size, hidden_dim=512, n_layers=2):
         super().__init__()
+        self.vocab_size = vocab_size
+
+        self.z_to_h = nn.Linear(d, hidden_dim * n_layers)
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.gru = nn.GRU(hidden_dim, hidden_dim, n_layers, batch_first=True)
+
+        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+        self.n_layers = n_layers
+        self.hidden_dim = hidden_dim
+
         self.modality = 'SMILES'
+
+    def forward(self, z, target_tokens):
+        z_global = z.mean(dim=1)
+        h0 = self.z_to_h(z_global).view(self.n_layers, -1, self.hidden_dim)
+        embedded = self.embedding(target_tokens)
+        output, _ = self.gru(embedded, h0)
+        logits = self.fc_out(output)
+        return logits
+
+    def loss(self, z, target_tokens):
+        logits = self.forward(z, target_tokens[:, :-1])
+        targets = target_tokens[:, 1:]
+        return F.cross_entropy(logits.reshape(-1, self.vocab_size), targets.reshape(-1))
 
 
 class CellInpaintingDecoder(nn.Module):
@@ -57,7 +78,7 @@ class CellInpaintingDecoder(nn.Module):
 # TODO
 class GeneExpressionDecoder(nn.Module):
     """Mean-pool encoder tokens → MLP → reconstruct Gene Expression"""
-    def __init__(self, d, hidden=512, cp_dim=5792):
+    def __init__(self, d, hidden=512, ge_dim=18211):
         super().__init__()
         self.modality = 'gene_expression'
 
@@ -67,6 +88,7 @@ class MultipleDecoders(nn.Module):
         super().__init__()
         self.decoders = decoders
         self.factors = factors if factors is not None else [1] * len(decoders)
+        self.modality = 'multiple'
 
     def forward(self, z):
         decoder = random.choice(self.decoders)
