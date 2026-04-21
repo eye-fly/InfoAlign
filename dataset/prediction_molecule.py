@@ -10,7 +10,7 @@ from .data_utils import scaffold_split
 
 
 class PredictionMoleculeDataset(object):
-    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint"):
+    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None):
         assert transform in [
             "fingerprint",
             "smiles",
@@ -48,7 +48,7 @@ class PredictionMoleculeDataset(object):
 
         super(PredictionMoleculeDataset, self).__init__()
         if transform == "smiles":
-            self.prepare_smiles_tokenized()
+            self.prepare_smiles_tokenized(vocab=vocab)
         elif transform == "fingerprint":
             self.prepare_fingerprints()
 
@@ -116,21 +116,26 @@ class PredictionMoleculeDataset(object):
 
         return torch.tensor(subset, dtype=torch.long)
 
-    def prepare_smiles_tokenized(self, max_len=128):
+    def prepare_smiles_tokenized(self, max_len=128, vocab=None):
         assert os.path.exists(self.raw_data), f"{self.raw_data} does not exist"
 
         processed_dir = osp.join(self.folder, "processed")
         os.makedirs(processed_dir, exist_ok=True)
-        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}.pt")
+
+        # If an external vocab is provided, always re-tokenise with it
+        # (the cached file was tokenised with the dataset's own vocab).
+        suffix = "_extv" if vocab is not None else ""
+        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}{suffix}.pt")
 
         if osp.exists(cache_path):
             x_list, y_list, vocab = torch.load(cache_path, weights_only=False)
         else:
-            from .smiles_tokenizer import build_vocab, encode
+            from .smiles_tokenizer import build_vocab as _build_vocab, encode
             print("Tokenizing SMILES...")
             data_df = pd.read_csv(self.raw_data)
             smiles_list = data_df["smiles"].tolist()
-            vocab = build_vocab(smiles_list)
+            if vocab is None:
+                vocab = _build_vocab(smiles_list)
 
             x_list, y_list = [], []
             for _, row in data_df.iterrows():
@@ -164,6 +169,10 @@ class PredictionMoleculeDataset(object):
                 for _, row in data_df.iterrows()
             ])
         self.fingerprints = fps
+
+        # Load gene expression features — NaN rows for compounds with no GE data.
+        data_df = pd.read_csv(self.raw_data)
+        self.ge_features = self._load_ge_features(data_df)
 
     def prepare_smiles(self):
         assert os.path.exists(
@@ -224,9 +233,35 @@ class PredictionMoleculeDataset(object):
         self.data = x_list
         self.labels = y_list
 
+    def _load_ge_features(self, data_df, ge_dim=978):
+        """Return (N, ge_dim) float32 tensor; NaN rows for compounds without GE data."""
+        raw_dir = osp.join(self.folder, "raw")
+        ge_csv  = osp.join(raw_dir, "GE.csv.gz")
+        ge_npz  = osp.join(raw_dir, "GE_feature.npz")
+        if not (osp.exists(ge_csv) and osp.exists(ge_npz)):
+            return None
+
+        ge_index = pd.read_csv(ge_csv)
+        ge_matrix = np.load(ge_npz)["data"].astype(np.float32)  # (631, 978)
+
+        # inchikey → list of row indices in ge_matrix (positional, multiple cell lines possible)
+        key_to_rows = {}
+        for i, row in ge_index.iterrows():
+            key_to_rows.setdefault(row["inchikey"], []).append(i)
+
+        N = len(data_df)
+        ge_out = np.full((N, ge_dim), np.nan, dtype=np.float32)
+        for i, (_, row) in enumerate(data_df.iterrows()):
+            key = row.get("inchikey", None)
+            if key is not None and key in key_to_rows:
+                rows = key_to_rows[key]
+                ge_out[i] = ge_matrix[rows].mean(axis=0)
+
+        return torch.tensor(ge_out)
+
     def __getitem__(self, idx):
         if hasattr(self, "fingerprints"):
-            return self.data[idx], self.fingerprints[idx], self.labels[idx]
+            return self.data[idx], self.fingerprints[idx], self.ge_features[idx], self.labels[idx]
         return self.data[idx], self.labels[idx]
 
     def __len__(self):

@@ -1,0 +1,88 @@
+Finetuning data for chembl2k already exists. Skipping download.
+Device: cuda:0
+Train/valid/test: 1413/353/589
+Pretrain epochs: 60  |  Finetune epochs: 100
+Decoders: GE  |  Freeze encoder: True
+
+==================================================
+Pretraining encoder for 60 epochs
+==================================================
+  epoch   1/60  loss=18.6150  codebook_entropy=5.706
+  epoch   2/60  loss=13.0960  codebook_entropy=5.218
+  epoch   3/60  loss=12.7959  codebook_entropy=4.960
+  epoch   4/60  loss=11.3257  codebook_entropy=4.814
+  epoch   5/60  loss=10.5047  codebook_entropy=4.699
+  epoch   6/60  loss=11.8834  codebook_entropy=4.689
+  epoch   7/60  loss=11.8065  codebook_entropy=4.732
+  epoch   8/60  loss=10.6435  codebook_entropy=4.742
+  epoch   9/60  loss=11.7693  codebook_entropy=4.802
+  epoch  10/60  loss=11.3506  codebook_entropy=4.844
+  epoch  11/60  loss=12.1627  codebook_entropy=4.922
+  epoch  12/60  loss=13.5734  codebook_entropy=5.039
+  epoch  13/60  loss=11.8787  codebook_entropy=5.151
+  epoch  14/60  loss=10.4807  codebook_entropy=5.204
+  epoch  15/60  loss=10.5134  codebook_entropy=5.216
+  epoch  16/60  loss=11.3651  codebook_entropy=5.237
+  epoch  17/60  loss=11.8837  codebook_entropy=5.278
+  epoch  18/60  loss=11.3224  codebook_entropy=5.336
+  epoch  19/60  loss=12.9008  codebook_entropy=5.406
+  epoch  20/60  loss=11.5740  codebook_entropy=5.465
+  epoch  21/60  loss=11.7982  codebook_entropy=5.506
+  epoch  22/60  loss=10.7923  codebook_entropy=5.531
+  epoch  23/60  loss=11.0458  codebook_entropy=5.554
+  epoch  24/60  loss=12.8554  codebook_entropy=5.606
+  epoch  25/60  loss=12.2036  codebook_entropy=5.644
+  epoch  26/60  loss=10.6940  codebook_entropy=5.663
+  epoch  27/60  loss=10.6672  codebook_entropy=5.674
+  epoch  28/60  loss=10.7337  codebook_entropy=5.691
+  epoch  29/60  loss=11.4515  codebook_entropy=5.706
+  epoch  30/60  loss=11.0025  codebook_entropy=5.722
+  epoch  31/60  loss=10.7433  codebook_entropy=5.729
+  epoch  32/60  loss=11.2776  codebook_entropy=5.730
+  epoch  33/60  loss=10.6212  codebook_entropy=5.727
+  epoch  34/60  loss=10.6925  codebook_entropy=5.727
+  epoch  35/60  loss=9.9557  codebook_entropy=5.731
+  epoch  36/60  loss=10.2067  codebook_entropy=5.729
+  epoch  37/60  loss=9.9659  codebook_entropy=5.723
+  epoch  38/60  loss=11.0359  codebook_entropy=5.716
+  epoch  39/60  loss=9.6050  codebook_entropy=5.703
+  epoch  40/60  loss=10.4178  codebook_entropy=5.679
+  epoch  41/60  loss=9.3981  codebook_entropy=5.650
+  epoch  42/60  loss=9.1016  codebook_entropy=5.623
+  epoch  43/60  loss=9.7461  codebook_entropy=5.596
+  epoch  44/60  loss=9.7905  codebook_entropy=5.570
+  epoch  45/60  loss=9.0833  codebook_entropy=5.539
+  epoch  46/60  loss=8.8306  codebook_entropy=5.503
+  epoch  47/60  loss=8.3502  codebook_entropy=5.469
+  epoch  48/60  loss=8.6319  codebook_entropy=5.447
+  epoch  49/60  loss=9.3075  codebook_entropy=5.420
+  epoch  50/60  loss=8.6989  codebook_entropy=5.390
+  epoch  51/60  loss=8.6251  codebook_entropy=5.358
+  epoch  52/60  loss=8.5899  codebook_entropy=5.324
+  epoch  53/60  loss=8.3816  codebook_entropy=5.284
+  epoch  54/60  loss=9.1025  codebook_entropy=5.246
+  epoch  55/60  loss=8.6481  codebook_entropy=5.218
+  epoch  56/60  loss=8.3156  codebook_entropy=5.188
+  epoch  57/60  loss=8.4660  codebook_entropy=5.156
+  epoch  58/60  loss=8.4782  codebook_entropy=5.126
+  epoch  59/60  loss=8.6437  codebook_entropy=5.103
+  epoch  60/60  loss=8.7352  codebook_entropy=5.085
+
+==================================================
+Finetuning classification head (frozen encoder) for 100 epochs
+==================================================
+  epoch  10/100  valid=0.7522  best_valid=0.7522  best_test=0.7177
+  epoch  20/100  valid=0.7603  best_valid=0.7695  best_test=0.7474
+  epoch  30/100  valid=0.7683  best_valid=0.7695  best_test=0.7474
+  epoch  40/100  valid=0.7742  best_valid=0.7828  best_test=0.7597
+  epoch  50/100  valid=0.7754  best_valid=0.7828  best_test=0.7597
+  epoch  60/100  valid=0.7674  best_valid=0.7839  best_test=0.7629
+  epoch  70/100  valid=0.7694  best_valid=0.7839  best_test=0.7629
+  epoch  80/100  valid=0.7761  best_valid=0.7839  best_test=0.7629
+  epoch  90/100  valid=0.7785  best_valid=0.7839  best_test=0.7629
+  epoch 100/100  valid=0.7780  best_valid=0.7839  best_test=0.7629
+
+  Best epoch 55: valid=0.7839  test=0.7629
+
+Saved to results/pre60_ft100_frozen_nodec.txt
+

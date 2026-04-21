@@ -2,18 +2,34 @@
 # Split: scaffold  |  Train/Valid/Test: 1413/353/589
 # Encoder: V=512, d=256, 6 layers, K_layers=[1,3,5], gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15
 # Head: ClassificationHead MLP(256->256->41), 100 finetune epochs, frozen encoder unless noted
-# All runs: seed=0, batch=256, lr=1e-3
+# Joint training: seed=0, lr=3e-4, drop=0.5, 250ep | Random/MLP: 5-seed mean
 
-Model                                       valid    test
+Model                                       valid    test    seeds
 ----------------------------------------------------------
-Random encoder + frozen head                0.7855   0.7732
+MLP on Morgan fingerprints                  0.8393   0.7855  5
+Pretrain 156k (30ep SMILES) +
+  joint finetune 200ep (SMILES+GE+head)    0.8148   0.7721  1   ← NEW
+Joint training (encoder+GE decoder+head,
+  drop=0.5, lr=3e-4, 250ep)                0.8206   0.7665  1
+Joint training (SMILES decoder,
+  no pretrain, 250ep)                      0.8298   0.7677  1
+Random encoder + frozen head               0.7991   0.7765  5
+Pretrained encoder (60ep, GE decoder)
+  + frozen head                             0.7839   0.7629  1
+Joint training (drop=0.2, lr=1e-3, 150ep)  0.7992   0.7556  1
 Pretrained encoder (60ep, no decoder)
-  + frozen head                             0.7809   0.7370
+  + frozen head                             0.7809   0.7370  1
 ----------------------------------------------------------
+
+Random encoder per-seed:
+  seed 0: valid 0.7837  test 0.7722
+  seed 1: valid 0.7921  test 0.7809
+  seed 2: valid 0.7996  test 0.7776
+  seed 3: valid 0.8088  test 0.7741
+  seed 4: valid 0.8111  test 0.7776
 
 findings:
-  Pretraining is worse vs random init (-0.036 test AUC).
-  Confirms encoder collapse — 60 epochs of self-supervised training without
-  a reconstruction decoder produces representations no better than random.
-  Fixing this requires a stronger decoder (AR SMILES or multi-modal).
+  Joint training test (0.7665) still below random encoder mean (0.7765) — encoder not generalizing.
+  Valid scores look good (0.8206) but scaffold test set has different distribution.
+  Likely fix: pretrain on full pretrain_raw/ (156k mol) before joint finetuning.
 
