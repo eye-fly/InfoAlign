@@ -47,6 +47,25 @@ class SMILESDecoder(nn.Module):
         return F.cross_entropy(logits, targets)
 
 
+class CPDecoder(nn.Module):
+    """Mean-pool encoder tokens → MLP → reconstruct CP-JUMP profile"""
+    def __init__(self, d, hidden=512, cp_dim=5792):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, cp_dim),
+        )
+
+    def forward(self, z):
+        # z: (B, L, d) → mean pool over sequence → (B, d) → (B, cp_dim)
+        return self.net(z.mean(dim=1))
+
+    def loss(self, z, profile):
+        logits = self.forward(z)
+        return F.binary_cross_entropy_with_logits(logits, profile)
+
+
 class GEDecoder(nn.Module):
     """Mean-pool encoder tokens → MLP → reconstruct 978-dim L1000 gene expression profile."""
     def __init__(self, d, hidden=512, ge_dim=978):
