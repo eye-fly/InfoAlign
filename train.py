@@ -30,7 +30,7 @@ from configures.arguments import get_args
 from dataset.create_datasets import get_data
 from dataset.pretrain_smiles import PretrainSMILESDataset
 from models.encoder import Encoder
-from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
+from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder, CPDecoder
 from models.classification_head import ClassificationHead
 from utils.train_funcs import train_one_epoch, get_cosine_schedule_with_warmup
 from utils.misc import AverageMeter
@@ -246,6 +246,7 @@ def main():
     parser.add_argument("--no-freeze",       action="store_true", help="Unfreeze the encoder during finetuning (end-to-end training). Default is frozen.")
     parser.add_argument("--with-decoder",    action="store_true", help="Enable the Fingerprint decoder module during encoder training")
     parser.add_argument("--with-ge-decoder",     action="store_true", help="Enable the LINCS L1000 Gene Expression regression decoder")
+    parser.add_argument("--with-gp-decoder",     action="store_true", help="Enable the CP Jump cell profile regression decoder")
     parser.add_argument("--with-smiles-decoder", action="store_true", help="Enable BERT-style Masked Language Modeling (SMILES reconstruction)")
     parser.add_argument("--joint",               action="store_true", help="Skipping staged pretraining: train Encoder, Decoders, and Classification Head all at once from scratch")
     parser.add_argument("--pretrain-on-pretrain-raw", action="store_true", help="Use the massive HuggingFace 1.5M ChEMBL dataset for purely unsupervised pretraining before finetuning")
@@ -363,6 +364,7 @@ def main():
 
     decoder        = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
     ge_decoder     = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
+    cp_decoder     = CPDecoder(d=256).to(device) if cli.with_cp_decoder else None
     smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
     head           = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
 
