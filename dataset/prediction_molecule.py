@@ -177,6 +177,9 @@ class PredictionMoleculeDataset(object):
         data_df = pd.read_csv(self.raw_data)
         self.ge_features = self._load_ge_features(data_df)
 
+        # Load cell profile features - NaN rows for compounds with no CP data.
+        self.cp_features = self._load_cp_features(data_df)
+
     def prepare_smiles(self):
         assert os.path.exists(
             self.raw_data
@@ -261,6 +264,33 @@ class PredictionMoleculeDataset(object):
                 ge_out[i] = ge_matrix[rows].mean(axis=0)
 
         return torch.tensor(ge_out)
+
+    def _load_cp_features(self, data_df, dim=978):
+        """Return (N, cp_dim) float32 tensor; NaN rows for compounds without CP data."""
+        # TODO Fix dimensions and file name
+        raw_dir = osp.join(self.folder, "raw")
+        csv = osp.join(raw_dir, "CP-JUMP.csv.gz")
+        npz = osp.join(raw_dir, "CP_feature.npz")
+        if not (osp.exists(csv) and osp.exists(npz)):
+            return None
+
+        index = pd.read_csv(csv)
+        matrix = np.load(npz)["data"].astype(np.float32)  # (631, 978)
+
+        # inchikey → list of row indices in matrix (positional, multiple cell lines possible)
+        key_to_rows = {}
+        for i, row in index.iterrows():
+            key_to_rows.setdefault(row["inchikey"], []).append(i)
+
+        N = len(data_df)
+        out = np.full((N, dim), np.nan, dtype=np.float32)
+        for i, (_, row) in enumerate(data_df.iterrows()):
+            key = row.get("inchikey", None)
+            if key is not None and key in key_to_rows:
+                rows = key_to_rows[key]
+                out[i] = matrix[rows].mean(axis=0)
+
+        return torch.tensor(out)
 
     def __getitem__(self, idx):
         batch = dict()
