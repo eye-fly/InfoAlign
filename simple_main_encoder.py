@@ -69,7 +69,7 @@ def main(args, seed):
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
     best_valid, best_test, best_train, best_epoch, best_params = None, None, None, 0, None
     for epoch in range(args.epochs):
-        train_loaders, avg_loss = train_one_epoch(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=decoder)
+        train_loaders, avg_loss = train_one_epoch(args, encoder, train_loaders, optimizer, scheduler, epoch, fp_decoder=decoder)
         print("Encoder loss:", avg_loss)
     #     valid_perf = validate(args, model, valid_loader)
 

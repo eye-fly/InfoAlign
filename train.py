@@ -15,16 +15,11 @@ Usage:
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-import math
 import os
 import argparse
 
-import numpy as np
 import torch
-import torch.optim as optim
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, Subset
-from sklearn.metrics import roc_auc_score
 
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
@@ -32,205 +27,9 @@ from dataset.pretrain_smiles import PretrainSMILESDataset
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder, CPDecoder
 from models.classification_head import ClassificationHead
-from utils.train_funcs import train_one_epoch, get_cosine_schedule_with_warmup
-from utils.misc import AverageMeter
+from utils.train_funcs import unwrap, pretrain, joint_train, finetune
 from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
-
-
-def roc_auc_eval(encoder, head, loader, device):
-    encoder.eval()
-    head.eval()
-    preds, trues = [], []
-    with torch.no_grad():
-        for batch in loader:
-            data = batch[0].to(device)
-            targets = batch[-1].to(device, dtype=torch.float32)
-            logits = head(encoder(data))
-            preds.append(torch.sigmoid(logits).cpu())
-            trues.append(targets.cpu())
-    preds = torch.cat(preds)
-    trues = torch.cat(trues)
-    import torch.distributed as dist
-    if dist.is_initialized():
-        # NCCL requires all tensors to be on the GPU for all_gather.
-        preds = preds.to(device)
-        trues = trues.to(device)
-        gathered_preds = [torch.zeros_like(preds) for _ in range(dist.get_world_size())]
-        gathered_trues = [torch.zeros_like(trues) for _ in range(dist.get_world_size())]
-        dist.all_gather(gathered_preds, preds)
-        dist.all_gather(gathered_trues, trues)
-        preds = torch.cat(gathered_preds)
-        trues = torch.cat(gathered_trues)
-
-    preds = preds.cpu().numpy()
-    trues = trues.cpu().numpy()
-    scores = []
-    for i in range(trues.shape[1]):
-        mask = ~np.isnan(trues[:, i])
-        if trues[mask, i].sum() > 0 and (1 - trues[mask, i]).sum() > 0:
-            scores.append(roc_auc_score(trues[mask, i], preds[mask, i]))
-    return float(np.mean(scores))
-
-
-def unwrap(model):
-    return model.module if hasattr(model, "module") else model
-
-
-def pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, epochs, device):
-    if hasattr(train_loader.sampler, "set_epoch"):
-        train_loader.sampler.set_epoch(0)
-    params = list(unwrap(encoder).student_params())
-    if decoder is not None:
-        params += list(unwrap(decoder).parameters())
-    if ge_decoder is not None:
-        params += list(unwrap(ge_decoder).parameters())
-    if smiles_decoder is not None:
-        params += list(unwrap(smiles_decoder).parameters())
-        
-    optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
-    train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
-
-    print(f"\n{'='*50}")
-    print(f"Pretraining encoder for {epochs} epochs")
-    print(f"{'='*50}")
-    for epoch in range(epochs):
-        if hasattr(train_loader.sampler, "set_epoch"):
-            train_loader.sampler.set_epoch(epoch)
-
-        progress = epoch / max(1, epochs - 1)
-        current_mask = args.mask_prob_start + (args.mask_prob_end - args.mask_prob_start) * progress
-        unwrap(encoder).mask_prob = current_mask
-
-        train_loaders, loss, components = train_one_epoch(
-            args, encoder, train_loaders, optimizer, scheduler, epoch,
-            decoder=decoder, ge_decoder=ge_decoder, smiles_decoder=smiles_decoder,
-        )
-        stats = unwrap(encoder).codebook_stats()
-        ent   = np.mean([s["entropy"] for s in stats.values()])
-        act   = int(np.mean([s["active"]  for s in stats.values()]))
-        comp_str = "  ".join(f"{k}={v:.3f}" for k, v in components.items())
-        print(f"  epoch {epoch+1:>3}/{epochs}  total={loss:.3f}  [{comp_str}]  entropy={ent:.3f}  active={act}/512")
-
-
-def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader, args, epochs, device,
-                ge_lambda=10.0, smiles_lambda=0.25, cls_lambda=1.0):
-    params = list(unwrap(encoder).student_params()) + list(unwrap(head).parameters())
-    if ge_decoder is not None:
-        params += list(unwrap(ge_decoder).parameters())
-    if smiles_decoder is not None:
-        params += list(unwrap(smiles_decoder).parameters())
-    optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
-
-    print(f"\n{'='*50}")
-    print(f"Joint training (encoder + GE decoder + head) for {epochs} epochs")
-    print(f"{'='*50}")
-
-    best_valid, best_test, best_epoch = 0.0, 0.0, 0
-    for epoch in range(epochs):
-        if hasattr(train_loader.sampler, "set_epoch"):
-            train_loader.sampler.set_epoch(epoch)
-            
-        progress = epoch / max(1, epochs - 1)
-        current_mask = args.mask_prob_start + (args.mask_prob_end - args.mask_prob_start) * progress
-        unwrap(encoder).mask_prob = current_mask
-
-        encoder.train()
-        head.train()
-        enc_m = AverageMeter(); cls_m = AverageMeter()
-        ge_m  = AverageMeter(); smi_m = AverageMeter()
-
-        for batch in train_loader:
-            data, fingerprints, ge, targets = batch
-            data    = data.to(device)
-            ge      = ge.to(device, dtype=torch.float32)
-            targets = targets.to(device, dtype=torch.float32)
-
-            optimizer.zero_grad()
-            use_smiles = smiles_decoder is not None and data.dtype == torch.long
-            enc_loss, z_masked, mask, x_orig = encoder(data, return_loss=True, update_codebooks=True, return_masked_info=True)
-            z = encoder(data)
-            cls_loss = head(z, targets=targets)
-            loss = enc_loss + cls_lambda * cls_loss
-            enc_m.update(enc_loss.item()); cls_m.update(cls_loss.item())
-
-            if ge_decoder is not None:
-                ge_l = ge_decoder(z, ge_targets=ge)
-                loss = loss + ge_lambda * ge_l
-                ge_m.update(ge_l.item())
-            if use_smiles:
-                smi_l = smiles_decoder(z_masked, mask=mask, original_tokens=x_orig)
-                loss = loss + smiles_lambda * smi_l
-                smi_m.update(smi_l.item())
-
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            unwrap(encoder).update_teacher()
-
-        valid_auc = roc_auc_eval(encoder, head, valid_loader, device)
-        if valid_auc > best_valid:
-            best_valid = valid_auc
-            best_test = roc_auc_eval(encoder, head, test_loader, device)
-            best_epoch = epoch + 1
-
-        stats = unwrap(encoder).codebook_stats()
-        ent = np.mean([s["entropy"] for s in stats.values()])
-        act = int(np.mean([s["active"] for s in stats.values()]))
-        comp = f"enc={enc_m.avg:.3f}  cls={cls_m.avg:.3f}"
-        if ge_m.count > 0:   comp += f"  ge={ge_m.avg:.4f}"
-        if smi_m.count > 0:  comp += f"  smi={smi_m.avg:.3f}"
-        print(f"  epoch {epoch+1:>3}/{epochs}  [{comp}]  entropy={ent:.3f}  active={act}/512  valid={valid_auc:.4f}  best={best_valid:.4f}")
-
-    print(f"\n  Best epoch {best_epoch}: valid={best_valid:.4f}  test={best_test:.4f}")
-    return best_valid, best_test
-
-
-def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epochs, freeze_encoder, device):
-    if freeze_encoder:
-        for p in encoder.parameters():
-            p.requires_grad = False
-        params = list(head.parameters())
-    else:
-        for p in encoder.parameters():
-            p.requires_grad = True
-        params = list(head.parameters()) + list(encoder.parameters())
-
-    optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
-
-    mode = "frozen encoder" if freeze_encoder else "end-to-end"
-    print(f"\n{'='*50}")
-    print(f"Finetuning classification head ({mode}) for {epochs} epochs")
-    print(f"{'='*50}")
-
-    best_valid, best_test, best_epoch = 0.0, 0.0, 0
-    for epoch in range(epochs):
-        if hasattr(train_loader.sampler, "set_epoch"):
-            train_loader.sampler.set_epoch(epoch)
-        encoder.train() if not freeze_encoder else encoder.eval()
-        head.train()
-        for batch in train_loader:
-            data = batch[0].to(device)
-            targets = batch[-1].to(device, dtype=torch.float32)
-            optimizer.zero_grad()
-            head(encoder(data), targets=targets).backward()
-            optimizer.step()
-            scheduler.step()
-
-        valid_auc = roc_auc_eval(encoder, head, valid_loader, device)
-        if valid_auc > best_valid:
-            best_valid = valid_auc
-            best_test = roc_auc_eval(encoder, head, test_loader, device)
-            best_epoch = epoch + 1
-
-        if (epoch + 1) % 10 == 0:
-            print(f"  epoch {epoch+1:>3}/{epochs}  valid={valid_auc:.4f}  best_valid={best_valid:.4f}  best_test={best_test:.4f}")
-
-    print(f"\n  Best epoch {best_epoch}: valid={best_valid:.4f}  test={best_test:.4f}")
-    return best_valid, best_test
 
 
 def main():
@@ -244,9 +43,9 @@ def main():
     parser.add_argument("--gpu-id",          type=int,   default=0, help="ID of the GPU to use when not running under torchrun/DDP")
     parser.add_argument("--num-workers",     type=int,   default=0, help="Number of dataloader workers (keep 0 if hitting IPC memory issues)")
     parser.add_argument("--no-freeze",       action="store_true", help="Unfreeze the encoder during finetuning (end-to-end training). Default is frozen.")
-    parser.add_argument("--with-decoder",    action="store_true", help="Enable the Fingerprint decoder module during encoder training")
+    parser.add_argument("--with-fp-decoder",    action="store_true", help="Enable the Fingerprint decoder module during encoder training")
     parser.add_argument("--with-ge-decoder",     action="store_true", help="Enable the LINCS L1000 Gene Expression regression decoder")
-    parser.add_argument("--with-gp-decoder",     action="store_true", help="Enable the CP Jump cell profile regression decoder")
+    parser.add_argument("--with-cp-decoder",     action="store_true", help="Enable the CP Jump cell profile regression decoder")
     parser.add_argument("--with-smiles-decoder", action="store_true", help="Enable BERT-style Masked Language Modeling (SMILES reconstruction)")
     parser.add_argument("--joint",               action="store_true", help="Skipping staged pretraining: train Encoder, Decoders, and Classification Head all at once from scratch")
     parser.add_argument("--pretrain-on-pretrain-raw", action="store_true", help="Use the massive HuggingFace 1.5M ChEMBL dataset for purely unsupervised pretraining before finetuning")
@@ -271,6 +70,7 @@ def main():
         cli.gpu_id = local_rank
     else:
         device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
+        device = "cpu"
 
     # Reuse get_args for dataset-level settings (eval metric, num_tasks etc.)
     args = get_args.__wrapped__() if hasattr(get_args, "__wrapped__") else argparse.Namespace(
@@ -362,7 +162,7 @@ def main():
         vocab_size=vocab_size, mask_token_id=mask_id, pad_token_id=pad_id,
     ).to(device)
 
-    decoder        = FingerprintDecoder(d=256).to(device) if cli.with_decoder else None
+    fp_decoder        = FingerprintDecoder(d=256).to(device) if cli.with_fp_decoder else None
     ge_decoder     = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
     cp_decoder     = CPDecoder(d=256).to(device) if cli.with_cp_decoder else None
     smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
@@ -370,15 +170,22 @@ def main():
 
     if dist.is_initialized():
         encoder = DDP(encoder, device_ids=[local_rank], output_device=local_rank)
-        if decoder is not None: decoder = DDP(decoder, device_ids=[local_rank], output_device=local_rank)
+        if fp_decoder is not None: fp_decoder = DDP(fp_decoder, device_ids=[local_rank], output_device=local_rank)
         if ge_decoder is not None: ge_decoder = DDP(ge_decoder, device_ids=[local_rank], output_device=local_rank)
+        if cp_decoder is not None: cp_decoder = DDP(cp_decoder, device_ids=[local_rank], output_device=local_rank)
         if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank], output_device=local_rank)
         head = DDP(head, device_ids=[local_rank], output_device=local_rank)
 
     print(f"Device: {device}")
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
-    decoders_str = ", ".join(filter(None, ["FP" if decoder else None, "GE" if ge_decoder else None, "SMILES" if smiles_decoder else None])) or "none"
+    decoders_str = (
+            ", ".join(filter(None, [
+                "FP" if fp_decoder else None,
+                "GE" if ge_decoder else None,
+                "CP" if cp_decoder else None,
+                "SMILES" if smiles_decoder else None]
+                             )) or "none")
     mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
     print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
@@ -390,7 +197,7 @@ def main():
         pre_sampler = DistributedSampler(pretrain_ds, shuffle=True) if dist.is_initialized() else None
         pretrain_loader = DataLoader(pretrain_ds, batch_size=per_gpu_batch, shuffle=(pre_sampler is None), sampler=pre_sampler, num_workers=cli.num_workers)
         args.steps = len(pretrain_loader)
-        pretrain(encoder, decoder, ge_decoder, smiles_decoder, pretrain_loader, args, cli.pretrain_epochs, device)
+        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, pretrain_loader, args, cli.pretrain_epochs)
         args.steps = len(train_loader)  # reset for finetune
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
@@ -401,14 +208,14 @@ def main():
     if cli.joint:
         best_valid, best_test = joint_train(
             encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader,
-            args, cli.finetune_epochs, device=device,
+            args, cli.finetune_epochs
         )
     else:
         if cli.pretrain_epochs > 0:
-            pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, cli.pretrain_epochs, device)
+            pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, train_loader, args, cli.pretrain_epochs)
         best_valid, best_test = finetune(
             encoder, head, train_loader, valid_loader, test_loader,
-            args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze, device=device,
+            args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze
         )
 
     if local_rank <= 0:

@@ -30,6 +30,11 @@ Example training on finetune-chembl2k.
 python train.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100
 ```
 
+Example training with GPU:
+```bash
+python train.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100 --batch_size 1
+```
+
 The ChEMBL dataset is downloaded automatically from HuggingFace.
 Morgan fingerprint encoding (2048-bit, radius=2) is triggered by `get_data()` — see `dataset/prediction_molecule.py:prepare_fingerprints()`.
 
