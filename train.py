@@ -32,16 +32,10 @@ from dataset.pretrain_smiles import PretrainSMILESDataset
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
 from models.classification_head import ClassificationHead
-from utils.train_funcs import train_one_epoch
+from utils.train_funcs import train_one_epoch, get_cosine_schedule_with_warmup
 from utils.misc import AverageMeter
 from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
-
-def get_cosine_schedule(optimizer, total_steps):
-    def lr(step):
-        p = step / max(1, total_steps)
-        return max(0, math.cos(math.pi * 7 / 16 * p))
-    return LambdaLR(optimizer, lr)
 
 
 def roc_auc_eval(encoder, head, loader, device):
@@ -95,7 +89,7 @@ def pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, e
         params += list(unwrap(smiles_decoder).parameters())
         
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
 
     print(f"\n{'='*50}")
@@ -128,7 +122,7 @@ def joint_train(encoder, ge_decoder, smiles_decoder, head, train_loader, valid_l
     if smiles_decoder is not None:
         params += list(unwrap(smiles_decoder).parameters())
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
 
     print(f"\n{'='*50}")
     print(f"Joint training (encoder + GE decoder + head) for {epochs} epochs")
@@ -205,7 +199,7 @@ def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epoch
         params = list(head.parameters()) + list(encoder.parameters())
 
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule(optimizer, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
 
     mode = "frozen encoder" if freeze_encoder else "end-to-end"
     print(f"\n{'='*50}")
