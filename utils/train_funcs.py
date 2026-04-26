@@ -321,9 +321,11 @@ def train_one_epoch(
 
 
 def joint_train(encoder,
-                ge_decoder, cp_decoder, smiles_decoder,
-                head, train_loader, valid_loader, test_loader, args, epochs, device,
+                train_loader, valid_loader, test_loader,
+                args, epochs,
+                head, ge_decoder, cp_decoder, smiles_decoder,
                 ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25, cls_lambda=1.0):
+    device = args.device
     params = extract_decoder_params(encoder, decoders=[ge_decoder, cp_decoder, smiles_decoder])
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
     scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
@@ -356,9 +358,9 @@ def joint_train(encoder,
 
 
 def pretrain(encoder,
-             decoder, ge_decoder, cp_decoder, smiles_decoder,
-             train_loader, args, epochs):
-    device = args.device
+             train_loader,
+             args, epochs,
+             decoder, ge_decoder, cp_decoder, smiles_decoder):
     if hasattr(train_loader.sampler, "set_epoch"):
         train_loader.sampler.set_epoch(0)
     params = extract_decoder_params(encoder=encoder, decoders=[decoder, ge_decoder, cp_decoder, smiles_decoder])
@@ -385,7 +387,10 @@ def pretrain(encoder,
         print_encoder_data(encoder, epoch, epochs, loss, components)
 
 
-def finetune(encoder, head, train_loader, valid_loader, test_loader, args, epochs, freeze_encoder, device):
+def finetune(encoder, freeze_encoder,
+             train_loader, valid_loader, test_loader,
+             args, epochs,
+             head):
     if freeze_encoder:
         for p in encoder.parameters():
             p.requires_grad = False

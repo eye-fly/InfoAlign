@@ -13,6 +13,9 @@ Usage:
 """
 
 import warnings
+
+import pandas as pd
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
 import os
@@ -20,6 +23,10 @@ import argparse
 
 import torch
 from torch.utils.data import DataLoader, Subset
+
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
@@ -58,10 +65,6 @@ def main():
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
     cli = parser.parse_args()
 
-    import torch.distributed as dist
-    from torch.nn.parallel import DistributedDataParallel as DDP
-    from torch.utils.data.distributed import DistributedSampler
-
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if local_rank != -1:
         dist.init_process_group(backend="nccl" if dist.is_nccl_available() else "gloo")
@@ -70,7 +73,8 @@ def main():
         cli.gpu_id = local_rank
     else:
         device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
-        device = "cpu"
+    # TODO REMOVE
+    device = "cpu"
 
     # Reuse get_args for dataset-level settings (eval metric, num_tasks etc.)
     args = get_args.__wrapped__() if hasattr(get_args, "__wrapped__") else argparse.Namespace(
@@ -99,7 +103,6 @@ def main():
     # Load finetune dataset — build combined vocab if using pretrain_raw/ (either pretraining or loading checkpoint)
     need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
     if need_pretrain_vocab:
-        import pandas as pd
         finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
         pretrain_ds = PretrainSMILESDataset(root="./raw_data")
         
@@ -207,20 +210,34 @@ def main():
 
     if cli.joint:
         best_valid, best_test = joint_train(
-            encoder, ge_decoder, smiles_decoder, head, train_loader, valid_loader, test_loader,
-            args, cli.finetune_epochs
+            encoder,
+            train_loader, valid_loader, test_loader,
+            args, cli.finetune_epochs,
+            head, ge_decoder, cp_decoder, smiles_decoder
         )
     else:
         if cli.pretrain_epochs > 0:
-            pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, train_loader, args, cli.pretrain_epochs)
+            pretrain(
+                encoder,
+                train_loader,
+                args, cli.pretrain_epochs,
+                fp_decoder, ge_decoder, cp_decoder, smiles_decoder)
+
         best_valid, best_test = finetune(
-            encoder, head, train_loader, valid_loader, test_loader,
-            args, cli.finetune_epochs, freeze_encoder=not cli.no_freeze
+            encoder, not cli.no_freeze,
+            train_loader, valid_loader, test_loader,
+            args, cli.finetune_epochs,
+            head
         )
 
     if local_rank <= 0:
         os.makedirs("results", exist_ok=True)
-        tag = f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_ft{cli.finetune_epochs}_{'frozen' if not cli.no_freeze else 'e2e'}_{'ge' if ge_decoder else 'nodec'}_{cli.head_type}"
+        tag = (f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_"
+               f"ft{cli.finetune_epochs}_"
+               f"{'frozen' if not cli.no_freeze else 'e2e'}_"
+               f"{'ge' if ge_decoder else 'nodec'}_"
+               f"{'cp' if cp_decoder else 'nodec'}_"
+               f"{cli.head_type}")
         with open(f"results/{tag}.txt", "w") as f:
             f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")
         print(f"\nSaved to results/{tag}.txt")
