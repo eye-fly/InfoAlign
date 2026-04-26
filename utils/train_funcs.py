@@ -391,6 +391,7 @@ def finetune(encoder, freeze_encoder,
              train_loader, valid_loader, test_loader,
              args, epochs,
              head):
+    device = args.device
     if freeze_encoder:
         for p in encoder.parameters():
             p.requires_grad = False
