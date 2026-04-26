@@ -5,12 +5,15 @@ import pandas as pd
 import numpy as np
 import torch
 from sklearn.model_selection import train_test_split
+from triton.backends.nvidia.compiler import get_features
 
 from .data_utils import scaffold_split
 
 
 class PredictionMoleculeDataset(object):
     def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None):
+        self.cp_features = None
+
         assert transform in [
             "fingerprint",
             "smiles",
@@ -260,9 +263,17 @@ class PredictionMoleculeDataset(object):
         return torch.tensor(ge_out)
 
     def __getitem__(self, idx):
-        if hasattr(self, "fingerprints"):
-            return self.data[idx], self.fingerprints[idx], self.ge_features[idx], self.labels[idx]
-        return self.data[idx], self.labels[idx]
+        batch = dict()
+
+        batch['data'] = self.data[idx]
+        batch['labels'] = self.labels[idx]
+        if hasattr(self, "fingerprints") and self.fingerprints is not None:
+            batch['fingerprints'] = self.fingerprints[idx]
+        if hasattr(self, "ge_features") and self.ge_features is not None:
+            batch['ge_features'] = self.ge_features[idx]
+        if hasattr(self, "cp_features") and self.cp_features is not None:
+            batch['cp_features'] = self.cp_features[idx]
+        return batch
 
     def __len__(self):
         return len(self.data)

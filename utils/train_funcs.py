@@ -84,15 +84,17 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             train_loaders["train_iter"] = iter(train_loaders["train_loader"])
             batch = next(train_loaders["train_iter"])
 
-        if len(batch) == 1:
-            data = batch[0].to(device)
-            fingerprints = ge = targets = None
-        else:
-            data, fingerprints, ge, targets = batch
-            data         = data.to(device)
-            fingerprints = fingerprints.to(device, dtype=torch.float32)
-            ge           = ge.to(device, dtype=torch.float32)
-            targets      = targets.to(device, dtype=torch.float32)
+        data = batch['data'].to(device)
+        fingerprints = ge_features = cp = targets = None
+
+        if 'fingerprints' in batch:
+            fingerprints = batch['fingerprints'].to(device, dtype=torch.float32)
+        if 'ge_features' in batch:
+            ge_features = batch['ge_features'].to(device, dtype=torch.float32)
+        if 'cp_features' in batch:
+            cp_features = batch['cp_features'].to(device, dtype=torch.float32)
+        if 'targets' in batch:
+            targets = batch['targets'].to(device, dtype=torch.float32)
 
         use_smiles = smiles_decoder is not None and data.dtype == torch.long
         enc_out = encoder(data, return_loss=True, update_codebooks=True, return_masked_info=use_smiles)
@@ -112,8 +114,8 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             loss = loss + decoder_lambda * fp_l
             fp_losses.update(fp_l.item())
 
-        if ge_decoder is not None and ge is not None:
-            ge_l = ge_decoder(z, ge_targets=ge)
+        if ge_decoder is not None and ge_features is not None:
+            ge_l = ge_decoder(z, ge_targets=ge_features)
             loss = loss + ge_lambda * ge_l
             ge_losses.update(ge_l.item())
             
@@ -141,7 +143,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             if fp_losses.count > 0:
                 desc += f"  fp={fp_losses.avg:.3f}"
             if ge_losses.count > 0:
-                desc += f"  ge={ge_losses.avg:.4f}"
+                desc += f"  ge_features={ge_losses.avg:.4f}"
             if smi_losses.count > 0:
                 desc += f"  smi={smi_losses.avg:.3f}"
             desc += f"  {batch_time.avg*1000:.0f}ms/batch"
@@ -155,7 +157,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
     if fp_losses.count > 0:
         component_losses["fp"] = fp_losses.avg
     if ge_losses.count > 0:
-        component_losses["ge"] = ge_losses.avg
+        component_losses["ge_features"] = ge_losses.avg
     if smi_losses.count > 0:
         component_losses["smi"] = smi_losses.avg
 
