@@ -1,12 +1,15 @@
 import time
 from tqdm import tqdm
 import torch
+
+from models.encoder import Encoder
 from .misc import AverageMeter
 
 cls_criterion = torch.nn.BCEWithLogitsLoss(reduction="none")
 reg_criterion = torch.nn.L1Loss(reduction="none")
 
-def train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch):
+
+def train_one_epoch_old(args, model, train_loaders, optimizer, scheduler, epoch):
     if args.task_type == "regression":
         criterion = reg_criterion
     else:
@@ -60,19 +63,36 @@ def train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch):
 
     return train_loaders
 
+
 ######################################################
 ###### ENCODER Part ######### TODO
 ######################################################
 
-def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, scheduler, epoch, decoder=None, decoder_lambda=0.25, ge_decoder=None, ge_lambda=0.25, smiles_decoder=None, smiles_lambda=0.25):
+def train_one_epoch(
+        args,
+        encoder: Encoder,
+        train_loaders,
+        optimizer,
+        scheduler,
+        epoch,
+        decoder=None,
+        decoder_lambda=0.25,
+        ge_decoder=None,
+        ge_lambda=0.25,
+        smiles_decoder=None,
+        smiles_lambda=0.25,
+        cp_decoder=None,
+        cp_lambda=0
+):
     if not args.no_print:
         p_bar = tqdm(range(args.steps))
     batch_time = AverageMeter()
     total_losses = AverageMeter()
-    enc_losses   = AverageMeter()
-    fp_losses    = AverageMeter()
-    ge_losses    = AverageMeter()
-    smi_losses   = AverageMeter()
+    enc_losses = AverageMeter()
+    fp_losses = AverageMeter()
+    ge_losses = AverageMeter()
+    cp_losses = AverageMeter()
+    smi_losses = AverageMeter()
     device = args.device
     encoder.train()
     for batch_idx in range(args.steps):
@@ -85,7 +105,7 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
             batch = next(train_loaders["train_iter"])
 
         data = batch['data'].to(device)
-        fingerprints = ge_features = cp = targets = None
+        fingerprints = ge_features = cp_features = targets = None
 
         if 'fingerprints' in batch:
             fingerprints = batch['fingerprints'].to(device, dtype=torch.float32)
@@ -98,27 +118,30 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
 
         use_smiles = smiles_decoder is not None and data.dtype == torch.long
         enc_out = encoder(data, return_loss=True, update_codebooks=True, return_masked_info=use_smiles)
-        
+
         if use_smiles:
             enc_loss, z_masked, mask, x_orig = enc_out
         else:
             enc_loss = enc_out
-            
+
         loss = enc_loss
         enc_losses.update(enc_loss.item())
 
-        z = encoder(data) if (decoder is not None or ge_decoder is not None) else None
+        z = encoder(data) if (decoder is not None or ge_decoder is not None or cp_decoder is not None) else None
 
         if decoder is not None and fingerprints is not None:
             fp_l = decoder(z, fingerprint=fingerprints)
-            loss = loss + decoder_lambda * fp_l
+            loss += decoder_lambda * fp_l
             fp_losses.update(fp_l.item())
-
         if ge_decoder is not None and ge_features is not None:
             ge_l = ge_decoder(z, ge_targets=ge_features)
-            loss = loss + ge_lambda * ge_l
+            loss += ge_lambda * ge_l
             ge_losses.update(ge_l.item())
-            
+        if cp_decoder is not None and cp_features is not None:
+            cp_l = cp_decoder(z, cp_targets=cp_features)
+            loss += cp_lambda * cp_l
+            cp_losses.update(cp_l.item())
+
         if use_smiles:
             smi_l = smiles_decoder(z_masked, mask=mask, original_tokens=x_orig)
             loss = loss + smiles_lambda * smi_l
@@ -127,26 +150,28 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         loss.backward()
         optimizer.step()
         scheduler.step()
-        
+
         # unwrap encoder before calling update_teacher to avoid DDP errors
         model = encoder.module if hasattr(encoder, "module") else encoder
         model.update_teacher()
-        
+
         total_losses.update(loss.item())
         batch_time.update(time.time() - end)
 
         if not args.no_print:
-            desc = (f"Epoch {epoch+1}  "
-                    f"[{batch_idx+1}/{args.steps}]  "
+            desc = (f"Epoch {epoch + 1}  "
+                    f"[{batch_idx + 1}/{args.steps}]  "
                     f"loss={total_losses.avg:.3f}  "
                     f"enc={enc_losses.avg:.3f}")
             if fp_losses.count > 0:
                 desc += f"  fp={fp_losses.avg:.3f}"
             if ge_losses.count > 0:
                 desc += f"  ge_features={ge_losses.avg:.4f}"
+            if cp_losses.count > 0:
+                desc += f"  c[_features={cp_losses.avg:.4f}"
             if smi_losses.count > 0:
                 desc += f"  smi={smi_losses.avg:.3f}"
-            desc += f"  {batch_time.avg*1000:.0f}ms/batch"
+            desc += f"  {batch_time.avg * 1000:.0f}ms/batch"
             p_bar.set_description(desc)
             p_bar.update()
 
@@ -158,6 +183,8 @@ def train_one_epoch_only_encoder(args, encoder, train_loaders, optimizer, schedu
         component_losses["fp"] = fp_losses.avg
     if ge_losses.count > 0:
         component_losses["ge_features"] = ge_losses.avg
+    if cp_losses.count > 0:
+        component_losses["cp_features"] = cp_losses.avg
     if smi_losses.count > 0:
         component_losses["smi"] = smi_losses.avg
 

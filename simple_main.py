@@ -14,7 +14,7 @@ from torch.nn.utils import parameters_to_vector, vector_to_parameters
 from configures.arguments import get_args
 from dataset.create_datasets import get_data
 from utils import validate, save_prediction
-from utils.train_funcs import train_one_epoch
+from utils.train_funcs import train_one_epoch_old
 from models.mlp import MLP
 
 
@@ -55,7 +55,7 @@ def main(args, seed):
     best_valid, best_test, best_train, best_epoch, best_params = None, None, None, 0, None
 
     for epoch in range(args.epochs):
-        train_loaders = train_one_epoch(args, model, train_loaders, optimizer, scheduler, epoch)
+        train_loaders = train_one_epoch_old(args, model, train_loaders, optimizer, scheduler, epoch)
         valid_perf = validate(args, model, valid_loader)
 
         improved = (epoch == 0) or (

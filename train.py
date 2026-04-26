@@ -32,7 +32,7 @@ from dataset.pretrain_smiles import PretrainSMILESDataset
 from models.encoder import Encoder
 from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder
 from models.classification_head import ClassificationHead
-from utils.train_funcs import train_one_epoch_only_encoder
+from utils.train_funcs import train_one_epoch
 from utils.misc import AverageMeter
 from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
@@ -109,7 +109,7 @@ def pretrain(encoder, decoder, ge_decoder, smiles_decoder, train_loader, args, e
         current_mask = args.mask_prob_start + (args.mask_prob_end - args.mask_prob_start) * progress
         unwrap(encoder).mask_prob = current_mask
 
-        train_loaders, loss, components = train_one_epoch_only_encoder(
+        train_loaders, loss, components = train_one_epoch(
             args, encoder, train_loaders, optimizer, scheduler, epoch,
             decoder=decoder, ge_decoder=ge_decoder, smiles_decoder=smiles_decoder,
         )

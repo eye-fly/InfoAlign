@@ -1,3 +1,18 @@
+## TODO:
+- Test existing training
+- Find all files to change to add decoder for cell profiles
+- Add decoder for cell profiles
+- Find dataset for cell painting
+- Find dataset for gene expression.
+- Debug training locally
+- Train on the resources given to us
+
+Files to change:
+- train_funcs
+- 
+
+TODO in future:
+- Rewrite train_one_epoch to allow for arbitrary collection of decoders instead of named arguments
 
 ## Setup
 
@@ -10,12 +25,17 @@ pip install -r requirements.txt
 
 ## Run
 
+Example training on finetune-chembl2k.
 ```bash
-python main.py --dataset finetune-chembl2k
+python train.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100
 ```
 
 The ChEMBL dataset is downloaded automatically from HuggingFace.
 Morgan fingerprint encoding (2048-bit, radius=2) is triggered by `get_data()` — see `dataset/prediction_molecule.py:prepare_fingerprints()`.
+
+The Gene Expression dataset is . It is downloaded from .
+
+The Cell Profile dataset is . It is downloaded from .
 
 ### Key args
 
