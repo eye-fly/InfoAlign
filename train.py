@@ -75,7 +75,7 @@ def main():
         cli.gpu_id = local_rank
     else:
         device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
-    device = 'cpu'
+
     # Reuse get_args for dataset-level settings (eval metric, num_tasks etc.)
     args = get_args.__wrapped__() if hasattr(get_args, "__wrapped__") else argparse.Namespace(
         dataset=cli.dataset, batch_size=cli.batch_size, lr=cli.lr, wdecay=cli.wdecay,
