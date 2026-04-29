@@ -7,10 +7,13 @@ import torch
 from sklearn.model_selection import train_test_split
 
 from .data_utils import scaffold_split
+from .smiles_enumerator import enumerate_smiles
+from .smiles_tokenizer import encode as _encode_smiles
 
 
 class PredictionMoleculeDataset(object):
-    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None):
+    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint",
+                 vocab=None, n_augmentations=0):
         assert transform in [
             "fingerprint",
             "smiles",
@@ -21,6 +24,10 @@ class PredictionMoleculeDataset(object):
         self.transform = transform
         self.raw_data = os.path.join(self.folder, "raw", "assays.csv.gz")
         self.task_type = 'finetune'
+        self.n_augmentations = n_augmentations
+        # aug_factor: 1 (original) + n_augmentations copies per molecule.
+        # Set to 1 when augmentation is disabled or in fingerprint mode.
+        self._aug_factor = 1
 
         self.eval_metric = "roc_auc"
         if name == "chembl2k":
@@ -70,9 +77,26 @@ class PredictionMoleculeDataset(object):
             )
             split_dict = {"train": train_idx, "valid": valid_idx, "test": test_idx}
 
+        # Expand indices to cover augmented copies.
+        # Original index i → [i * aug_factor, i * aug_factor + 1, ...,
+        #                      i * aug_factor + aug_factor - 1]
+        if self._aug_factor > 1:
+            split_dict["train"] = self._expand_indices(split_dict["train"])
+            split_dict["valid"] = split_dict["valid"] * self._aug_factor
+            split_dict["test"]  = split_dict["test"] * self._aug_factor
+
         if to_list:
             split_dict = {k: v.tolist() for k, v in split_dict.items()}
         return split_dict
+
+    def _expand_indices(self, indices):
+        """Map original molecule indices to expanded (augmented) indices."""
+        f = self._aug_factor
+        expanded = []
+        for idx in indices:
+            idx = int(idx)
+            expanded.extend(range(idx * f, idx * f + f))
+        return torch.tensor(expanded, dtype=torch.long)
 
     def resample_train_idx(self, train_idx, ratio, seed=0):
         if ratio >= 1.0:
@@ -125,10 +149,12 @@ class PredictionMoleculeDataset(object):
         # If an external vocab is provided, always re-tokenise with it
         # (the cached file was tokenised with the dataset's own vocab).
         suffix = "_extv" if vocab is not None else ""
-        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}{suffix}.pt")
+        n_aug = self.n_augmentations
+        aug_tag = f"_aug{n_aug}" if n_aug > 0 else ""
+        cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}{suffix}{aug_tag}.pt")
 
         if osp.exists(cache_path):
-            x_list, y_list, vocab = torch.load(cache_path, weights_only=False)
+            x_list, y_list, vocab, aug_factor = torch.load(cache_path, weights_only=False)
         else:
             from .smiles_tokenizer import build_vocab as _build_vocab, encode
             print("Tokenizing SMILES...")
@@ -139,14 +165,32 @@ class PredictionMoleculeDataset(object):
 
             x_list, y_list = [], []
             for _, row in data_df.iterrows():
-                ids, _ = encode(row["smiles"], vocab, max_len)
-                x_list.append(ids)
+                smi = row["smiles"]
+                ids, _ = encode(smi, vocab, max_len)
                 y = torch.tensor([float(row.iloc[col]) for col in range(self.start_column, len(row))], dtype=torch.float32)
+
+                # Original canonical tokenisation
+                x_list.append(ids)
                 y_list.append(y)
 
+                # Augmented SMILES enumerations
+                if n_aug > 0:
+                    aug_smiles = enumerate_smiles(smi, n_aug)
+                    for aug_smi in aug_smiles:
+                        aug_ids, _ = encode(aug_smi, vocab, max_len)
+                        x_list.append(aug_ids)
+                        y_list.append(y)
+                    # Pad if fewer than n_aug unique enumerations were found
+                    for _ in range(n_aug - len(aug_smiles)):
+                        x_list.append(ids)  # duplicate canonical
+                        y_list.append(y)
+
+            aug_factor = 1 + n_aug
             x_list = torch.stack(x_list)
             y_list = torch.stack(y_list)
-            torch.save((x_list, y_list, vocab), cache_path)
+            torch.save((x_list, y_list, vocab, aug_factor), cache_path)
+            print(f"Cached {len(x_list):,} tokenised SMILES "
+                  f"({len(x_list) // aug_factor} molecules × {aug_factor} variants)")
 
         self.data   = x_list
         self.labels = y_list
@@ -155,6 +199,7 @@ class PredictionMoleculeDataset(object):
         self.pad_token_id  = vocab['<pad>']
         self.mask_token_id = vocab['<mask>']
         self.max_smiles_len = max_len
+        self._aug_factor = aug_factor
 
         # Load fingerprints as decoder targets (same molecule order as SMILES).
         fp_cache = osp.join(processed_dir, "processed_fp.pt")
@@ -168,11 +213,18 @@ class PredictionMoleculeDataset(object):
                 torch.tensor(list(AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(row["smiles"]), 2)), dtype=torch.float32)
                 for _, row in data_df.iterrows()
             ])
+
+        # Duplicate fingerprints to match augmented SMILES
+        if self._aug_factor > 1:
+            fps = fps.repeat_interleave(self._aug_factor, dim=0)
         self.fingerprints = fps
 
         # Load gene expression features — NaN rows for compounds with no GE data.
         data_df = pd.read_csv(self.raw_data)
-        self.ge_features = self._load_ge_features(data_df)
+        ge = self._load_ge_features(data_df)
+        if ge is not None and self._aug_factor > 1:
+            ge = ge.repeat_interleave(self._aug_factor, dim=0)
+        self.ge_features = ge
 
     def prepare_smiles(self):
         assert os.path.exists(

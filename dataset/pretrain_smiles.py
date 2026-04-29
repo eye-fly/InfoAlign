@@ -14,6 +14,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .smiles_tokenizer import build_vocab, encode, PAD_TOKEN, MASK_TOKEN
+from .smiles_enumerator import enumerate_smiles
 
 
 class PretrainSMILESDataset(Dataset):
@@ -21,7 +22,8 @@ class PretrainSMILESDataset(Dataset):
 
     HF_REPO = "antoinebcx/smiles-molecules-chembl"
 
-    def __init__(self, root="raw_data", cache_name="chembl_pretrain", max_len=128):
+    def __init__(self, root="raw_data", cache_name="chembl_pretrain",
+                 max_len=128, n_augmentations=0):
         super().__init__()
         self.root = root
         self.cache_dir = osp.join(root, cache_name)
@@ -30,7 +32,8 @@ class PretrainSMILESDataset(Dataset):
         os.makedirs(self.cache_dir, exist_ok=True)
 
         vocab_path = osp.join(self.cache_dir, "vocab.json")
-        tokens_path = osp.join(self.cache_dir, f"tokens_L{max_len}.pt")
+        aug_tag = f"_aug{n_augmentations}" if n_augmentations > 0 else ""
+        tokens_path = osp.join(self.cache_dir, f"tokens_L{max_len}{aug_tag}.pt")
 
         if osp.exists(tokens_path) and osp.exists(vocab_path):
             print("Loading cached pretrain tokens ...")
@@ -55,16 +58,29 @@ class PretrainSMILESDataset(Dataset):
                 json.dump(self.vocab, f)
             print(f"Vocab size: {len(self.vocab)}")
 
-            # Tokenise all SMILES
+            # Tokenise all SMILES (+ augmented enumerations)
             print("Tokenising SMILES ...")
             token_list = []
             for smi in smiles_list:
                 ids, _ = encode(smi, self.vocab, max_len)
                 token_list.append(ids)
+
+                if n_augmentations > 0:
+                    aug_smiles = enumerate_smiles(smi, n_augmentations)
+                    for aug_smi in aug_smiles:
+                        aug_ids, _ = encode(aug_smi, self.vocab, max_len)
+                        token_list.append(aug_ids)
+                    # Pad with canonical if fewer unique enumerations found
+                    for _ in range(n_augmentations - len(aug_smiles)):
+                        token_list.append(ids)
+
             self.data = torch.stack(token_list)
 
             torch.save(self.data, tokens_path)
-            print(f"Cached {len(self.data):,} tokenised SMILES to {tokens_path}")
+            n_orig = len(smiles_list)
+            factor = 1 + n_augmentations
+            print(f"Cached {len(self.data):,} tokenised SMILES "
+                  f"({n_orig:,} molecules × {factor} variants)")
 
         self.vocab_size = len(self.vocab)
         self.pad_token_id = self.vocab[PAD_TOKEN]
@@ -74,7 +90,6 @@ class PretrainSMILESDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        # Return a tuple so DataLoader yields (batch_tokens,)
         return (self.data[idx],)
 
     @staticmethod

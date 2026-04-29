@@ -262,6 +262,7 @@ def main():
     parser.add_argument("--mask-prob-start", type=float, default=0.15, help="Starting probability for token masking curriculum (if SMILES decoder used)")
     parser.add_argument("--mask-prob-end",   type=float, default=0.15, help="Ending probability for token masking curriculum (linearly interpolated over epochs)")
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
+    parser.add_argument("--n-augmentations", type=int,   default=0, help="Number of SMILES enumerations per molecule")
     cli = parser.parse_args()
 
     import torch.distributed as dist
@@ -292,6 +293,7 @@ def main():
     args.mask_prob_start = cli.mask_prob_start
     args.mask_prob_end   = cli.mask_prob_end
     args.head_type   = cli.head_type
+    args.n_augmentations = cli.n_augmentations
     args.device      = device
     args.gpu_id      = cli.gpu_id
 
@@ -306,7 +308,7 @@ def main():
     if need_pretrain_vocab:
         import pandas as pd
         finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
-        pretrain_ds = PretrainSMILESDataset(root="./raw_data")
+        pretrain_ds = PretrainSMILESDataset(root="./raw_data", n_augmentations=cli.n_augmentations)
         
         chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
         if os.path.exists(chembl_cache):
