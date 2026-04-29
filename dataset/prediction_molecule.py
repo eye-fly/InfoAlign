@@ -349,7 +349,7 @@ class PredictionMoleculeDataset(object):
         batch = dict()
 
         batch['data'] = self.data[idx]
-        batch['labels'] = self.labels[idx]
+        batch['targets'] = self.labels[idx]
         if hasattr(self, "fingerprints") and self.fingerprints is not None:
             batch['fingerprints'] = self.fingerprints[idx]
         if hasattr(self, "ge_features") and self.ge_features is not None:
