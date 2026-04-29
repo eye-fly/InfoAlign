@@ -70,6 +70,10 @@ def get_args():
     parser.add_argument(
         "--patience", type=int, default=50, help="patience for early stop"
     )
+    parser.add_argument(
+        "--n-augmentations", type=int, default=0,
+        help="number of SMILES enumeration augmentations per molecule (default: 0 = none)",
+    )
 
     args = parser.parse_args()
 

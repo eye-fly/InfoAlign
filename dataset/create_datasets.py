@@ -56,6 +56,8 @@ def get_data(args, load_path, transform="fingerprint"):
         "smiles",
     ]
 
+    n_aug = getattr(args, "n_augmentations", 0)
+
     if args.dataset.startswith("finetune"):
         data_name = args.dataset.split("-")[1]
         download_finetune_data(data_name, load_path)
@@ -63,5 +65,7 @@ def get_data(args, load_path, transform="fingerprint"):
         data_name = args.dataset
 
     return PredictionMoleculeDataset(
-        name=data_name, root=load_path, transform=transform
+        name=data_name, root=load_path, transform=transform,
+        n_augmentations=n_aug,
     )
+

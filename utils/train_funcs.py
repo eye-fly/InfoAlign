@@ -84,9 +84,9 @@ def update_loss(decoder, z, decoder_lambda, losses, targets=None, mask=None, x_t
         return 0
     loss = 0
     if targets is not None:
-        loss = decoder(z, targets=targets)
+        loss = decoder.loss(z, targets=targets)
     elif mask is not None:
-        loss = decoder(z, mask=mask, x_target=x_target)
+        loss = decoder.loss(z, mask=mask, x_target=x_target)
     losses.update(loss.item())
     return decoder_lambda * loss
 
