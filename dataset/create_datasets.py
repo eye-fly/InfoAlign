@@ -66,6 +66,6 @@ def get_data(args, load_path, transform="fingerprint"):
 
     return PredictionMoleculeDataset(
         name=data_name, root=load_path, transform=transform,
-        n_augmentations=n_aug,
+        n_augmentations=n_aug
     )
 

@@ -12,7 +12,7 @@ from .smiles_tokenizer import encode as _encode_smiles
 
 
 class PredictionMoleculeDataset(object):
-    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None, n_augumentations=0):
+    def __init__(self, name="chembl2k", root="raw_data", transform="fingerprint", vocab=None, n_augmentations=0):
         self.cp_features = None
 
         assert transform in [

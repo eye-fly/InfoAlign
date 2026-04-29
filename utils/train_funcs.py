@@ -40,8 +40,8 @@ def roc_auc_eval(encoder, head, loader, device):
     preds, trues = [], []
     with torch.no_grad():
         for batch in loader:
-            data = batch[0].to(device)
-            targets = batch[-1].to(device, dtype=torch.float32)
+            data = batch['data'].to(device)
+            targets = batch['targets'].to(device, dtype=torch.float32)
             logits = head(encoder(data))
             preds.append(torch.sigmoid(logits).cpu())
             trues.append(targets.cpu())
@@ -136,6 +136,7 @@ def print_encoder_data(encoder: Encoder, epoch, epochs, loss, components):
 
 
 def train_one_epoch_old(args, model, train_loaders, optimizer, scheduler, epoch):
+    # From original InfoAlign, outdated
     if args.task_type == "regression":
         criterion = reg_criterion
     else:
@@ -416,8 +417,8 @@ def finetune(encoder, freeze_encoder,
         encoder.train() if not freeze_encoder else encoder.eval()
         head.train()
         for batch in train_loader:
-            data = batch[0].to(device)
-            targets = batch[-1].to(device, dtype=torch.float32)
+            data = batch['data'].to(device)
+            targets = batch['targets'].to(device, dtype=torch.float32)
             optimizer.zero_grad()
             head(encoder(data), targets=targets).backward()
             optimizer.step()

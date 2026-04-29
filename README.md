@@ -1,19 +1,3 @@
-## TODO:
-- Test existing training
-- Find all files to change to add decoder for cell profiles
-- Add decoder for cell profiles
-- Find dataset for cell painting
-- Find dataset for gene expression.
-- Debug training locally
-- Train on the resources given to us
-
-Files to change:
-- train_funcs
-- 
-
-TODO in future:
-- Rewrite train_one_epoch to allow for arbitrary collection of decoders instead of named arguments
-
 ## Setup
 
 ```bash
@@ -27,7 +11,7 @@ pip install -r requirements.txt
 
 Example training on finetune-chembl2k.
 ```bash
-python train.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100
+python train.py --dataset finetune-chembl2k --pretrain-epochs 1 --finetune-epochs 1
 ```
 
 Example training with GPU:
