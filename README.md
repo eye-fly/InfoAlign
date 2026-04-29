@@ -9,14 +9,9 @@ pip install -r requirements.txt
 
 ## Run
 
-Example training on finetune-chembl2k.
+Test command to check for glitches on finetune-chembl2k.
 ```bash
-python train.py --dataset finetune-chembl2k --pretrain-epochs 1 --finetune-epochs 1
-```
-
-Example training with GPU:
-```bash
-python train.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100 --batch_size 1
+python train.py --dataset finetune-chembl2k --with-cp-decoder --pretrain-epochs 1 --finetune-epochs 1
 ```
 
 The ChEMBL dataset is downloaded automatically from HuggingFace.

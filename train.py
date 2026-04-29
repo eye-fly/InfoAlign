@@ -11,7 +11,7 @@ Usage:
     # Pretrain + end-to-end finetune (unfreeze encoder)
     python train_encoder.py --dataset finetune-chembl2k --pretrain-epochs 60 --finetune-epochs 100 --no-freeze
 """
-
+import sys
 import warnings
 
 import pandas as pd
@@ -74,8 +74,6 @@ def main():
         cli.gpu_id = local_rank
     else:
         device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
-    # TODO REMOVE
-    device = "cpu"
 
     # Reuse get_args for dataset-level settings (eval metric, num_tasks etc.)
     args = get_args.__wrapped__() if hasattr(get_args, "__wrapped__") else argparse.Namespace(
@@ -237,10 +235,11 @@ def main():
         tag = (f"{'joint' if cli.joint else f'pre{cli.pretrain_epochs}'}_"
                f"ft{cli.finetune_epochs}_"
                f"{'frozen' if not cli.no_freeze else 'e2e'}_"
-               f"{'ge' if ge_decoder else 'nodec'}_"
-               f"{'cp' if cp_decoder else 'nodec'}_"
+               f"{'ge' if ge_decoder else 'noge'}_"
+               f"{'cp' if cp_decoder else 'nocp'}_"
                f"{cli.head_type}")
         with open(f"results/{tag}.txt", "w") as f:
+            f.write("Arguments: ".join(sys.argv))
             f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")
         print(f"\nSaved to results/{tag}.txt")
 
