@@ -227,10 +227,11 @@ class PredictionMoleculeDataset(object):
             ge = ge.repeat_interleave(self._aug_factor, dim=0)
         self.ge_features = ge
 
-
-        # TODO Update
         # Load cell profile features - NaN rows for compounds with no CP data.
-        self.cp_features = self._load_cp_features(data_df)
+        cp = self._load_cp_features(data_df)
+        if cp is not None and self._aug_factor > 1:
+            cp = cp.repeat_interleave(self._aug_factor, dim=0)
+        self.cp_features = cp
 
     def prepare_smiles(self):
         assert os.path.exists(
