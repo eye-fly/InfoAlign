@@ -1,0 +1,2 @@
+train.py --dataset finetune-chembl2k --with-ge-decoder --with-cp-decoder --pretrain-epochs 60 --finetune-epochs 100
+valid=0.7925  test=0.7761

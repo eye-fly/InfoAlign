@@ -239,7 +239,8 @@ def main():
                f"{'cp' if cp_decoder else 'nocp'}_"
                f"{cli.head_type}")
         with open(f"results/{tag}.txt", "w") as f:
-            f.write("Arguments: ".join(sys.argv))
+            f.write(" ".join(sys.argv))
+            f.write("\n")
             f.write(f"valid={best_valid:.4f}  test={best_test:.4f}\n")
         print(f"\nSaved to results/{tag}.txt")
 
