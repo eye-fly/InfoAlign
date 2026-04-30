@@ -11,7 +11,7 @@ pip install -r requirements.txt
 
 Test command to check for glitches on finetune-chembl2k.
 ```bash
-python train.py --dataset finetune-chembl2k --with-cp-decoder --pretrain-epochs 1 --finetune-epochs 1
+python train.py --dataset finetune-chembl2k --with-ge-decoder --with-cp-decoder --pretrain-epochs 1 --finetune-epochs 1
 ```
 
 The ChEMBL dataset is downloaded automatically from HuggingFace.

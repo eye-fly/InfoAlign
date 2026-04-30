@@ -318,12 +318,13 @@ class PredictionMoleculeDataset(object):
 
         return torch.tensor(ge_out)
 
-    def _load_cp_features(self, data_df, dim=978):
+    def _load_cp_features(self, data_df, dim=966):
         """Return (N, cp_dim) float32 tensor; NaN rows for compounds without CP data."""
         # TODO Fix dimensions and file name
         raw_dir = osp.join(self.folder, "raw")
         csv = osp.join(raw_dir, "CP-JUMP.csv.gz")
-        npz = osp.join(raw_dir, "CP_feature.npz")
+        npz = osp.join(raw_dir, "CP-JUMP_feature.npz")
+
         if not (osp.exists(csv) and osp.exists(npz)):
             return None
 

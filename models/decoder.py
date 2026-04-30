@@ -59,7 +59,7 @@ class GEDecoder(VectorDecoder):
 
 class CPDecoder(VectorDecoder):
     """Mean-pool encoder tokens → MLP → reconstruct CP Jump profile"""
-    def __init__(self, d, hidden=512, out_dim=978):
+    def __init__(self, d, hidden=512, out_dim=966):
         super().__init__(d, hidden, out_dim)
 
 
