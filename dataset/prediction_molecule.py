@@ -328,7 +328,7 @@ class PredictionMoleculeDataset(object):
         return self._load_features(data_df, csv_filename, npz_filename)
 
 
-    def _load_cp_features(self, data_df, csv_filename="CP_JUMP.csv.gz", npz_filename="CP-JUMP_feature.npz"):
+    def _load_cp_features(self, data_df, csv_filename="CP-JUMP.csv.gz", npz_filename="CP-JUMP_feature.npz"):
         """Return (N, dim) float32 tensor; NaN rows for compounds without CP data."""
         return self._load_features(data_df, csv_filename, npz_filename)
 

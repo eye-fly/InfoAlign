@@ -40,6 +40,90 @@ from rdkit import RDLogger
 RDLogger.DisableLog('rdApp.*')
 
 
+def load_smiles_pretrain_dataset(args, cli, local_rank):
+    # finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
+    pretrain_ds = PretrainSMILESDataset(root="./raw_data", n_augmentations=cli.n_augmentations)
+
+    chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
+    if os.path.exists(chembl_cache):
+        try:
+            _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
+            # Only invalidate the old local cache if it doesn't match the pretrain vocab length
+            if len(cached_vocab) != len(pretrain_ds.vocab):
+                if local_rank <= 0:
+                    print("Vocab size changed — invalidating old local ChEMBL2K cache to align with pretrained vocab!")
+                os.remove(chembl_cache)
+        except Exception:
+            pass
+    args._vocab_override = pretrain_ds.vocab
+    return pretrain_ds
+
+def prepare_encoder(cli, dataset, device, local_rank):
+    encoder = Encoder(
+        V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
+        gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
+        vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_id, pad_token_id=dataset.pad_id,
+    ).to(device)
+
+    if dist.is_initialized():
+        encoder = DDP(encoder, device_ids=[local_rank], output_device=local_rank)
+
+    return encoder
+
+def prepare_decoders(cli, dataset, device, local_rank):
+    fp_decoder = FingerprintDecoder(d=256).to(device) if cli.with_fp_decoder else None
+    ge_decoder = GEDecoder(d=256, out_dim=dataset.ge_features.shape[1]).to(device) if cli.with_ge_decoder else None
+    cp_decoder = CPDecoder(d=256, out_dim=dataset.cp_features.shape[1]).to(device) if cli.with_cp_decoder else None
+    smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
+    head = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
+
+    if dist.is_initialized():
+        if fp_decoder is not None: fp_decoder = DDP(fp_decoder, device_ids=[local_rank], output_device=local_rank)
+        if ge_decoder is not None: ge_decoder = DDP(ge_decoder, device_ids=[local_rank], output_device=local_rank)
+        if cp_decoder is not None: cp_decoder = DDP(cp_decoder, device_ids=[local_rank], output_device=local_rank)
+        if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank], output_device=local_rank)
+        head = DDP(head, device_ids=[local_rank], output_device=local_rank)
+
+    return {
+        'fp_decoder': fp_decoder,
+        'ge_decoder': ge_decoder,
+        'cp_decoder': cp_decoder,
+        'smiles_decoder': smiles_decoder,
+        'head': head
+    }
+
+
+def prepare_finetune_dataloaders(args, local_rank):
+    if local_rank > 0 and dist.is_initialized():
+        dist.barrier()
+    dataset = get_data(args.dataset,  args.n_augmentations, "./raw_data", transform="smiles")
+    if local_rank == 0 and dist.is_initialized():
+        dist.barrier()
+
+    split   = dataset.get_idx_split()
+
+    args.num_trained = len(split["train"])
+    args.task_type   = "classification"
+
+    train_sub = Subset(dataset, split["train"])
+    valid_sub = Subset(dataset, split["valid"])
+    test_sub  = Subset(dataset, split["test"])
+
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    per_gpu_batch = max(1, args.batch_size // world_size)
+
+    train_sampler = DistributedSampler(train_sub, shuffle=True) if dist.is_initialized() else None
+    valid_sampler = DistributedSampler(valid_sub, shuffle=False) if dist.is_initialized() else None
+    test_sampler  = DistributedSampler(test_sub, shuffle=False) if dist.is_initialized() else None
+
+    train_loader = DataLoader(train_sub, batch_size=per_gpu_batch, shuffle=(train_sampler is None),
+                              sampler=train_sampler, num_workers=args.num_workers)
+    valid_loader = DataLoader(valid_sub, batch_size=per_gpu_batch, shuffle=False, sampler=valid_sampler,
+                              num_workers=args.num_workers)
+    test_loader = DataLoader(test_sub, batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler,
+                             num_workers=args.num_workers)
+    return train_loader, valid_loader, test_loader
+
 def main():
     parser = argparse.ArgumentParser(description="InfoAlign: Multimodal Pretraining & Finetuning Pipeline")
     parser.add_argument("--dataset",         default="finetune-chembl2k", help="Name of the finetuning dataset (e.g., finetune-chembl2k, broad6k)")
@@ -48,6 +132,7 @@ def main():
     parser.add_argument("--batch-size",      type=int,   default=256, help="Global batch size across all GPUs (will be divided by world_size in DDP)")
     parser.add_argument("--lr",              type=float, default=1e-3, help="Peak learning rate for the Adam optimizer (cosine annealed)")
     parser.add_argument("--wdecay",          type=float, default=1e-5, help="Weight decay for regularization")
+    parser.add_argument("--cpu-training",    action='store_true', help="Training on cpu")
     parser.add_argument("--gpu-id",          type=int,   default=0, help="ID of the GPU to use when not running under torchrun/DDP")
     parser.add_argument("--num-workers",     type=int,   default=0, help="Number of dataloader workers (keep 0 if hitting IPC memory issues)")
     parser.add_argument("--no-freeze",       action="store_true", help="Unfreeze the encoder during finetuning (end-to-end training). Default is frozen.")
@@ -65,6 +150,7 @@ def main():
     parser.add_argument("--mask-prob-end",   type=float, default=0.15, help="Ending probability for token masking curriculum (linearly interpolated over epochs)")
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
     parser.add_argument("--n-augmentations", type=int,   default=0, help="Number of SMILES enumerations per molecule")
+    parser.add_argument("--pretrain-dataset", default=None, help="Dataset name to be used as a separate pretraining dataset (if none specified then finetune-dataset is used")
     cli = parser.parse_args()
 
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -74,7 +160,7 @@ def main():
         torch.cuda.set_device(device)
         cli.gpu_id = local_rank
     else:
-        device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() else "cpu")
+        device = torch.device(f"cuda:{cli.gpu_id}" if torch.cuda.is_available() and not cli.cpu_training else "cpu")
 
     # Reuse get_args for dataset-level settings (eval metric, num_tasks etc.)
     args = get_args.__wrapped__() if hasattr(get_args, "__wrapped__") else argparse.Namespace(
@@ -82,6 +168,7 @@ def main():
         gpu_id=cli.gpu_id, num_workers=cli.num_workers, no_print=True, subset_ratio=cli.subset_ratio,
     )
     args.dataset     = cli.dataset
+    args.pretrain_dataset = cli.pretrain_dataset
     args.batch_size  = cli.batch_size
     args.lr          = cli.lr
     args.wdecay      = cli.wdecay
@@ -94,45 +181,16 @@ def main():
     args.n_augmentations = cli.n_augmentations
     args.device      = device
     args.gpu_id      = cli.gpu_id
+    args.num_workers = cli.num_workers
 
     torch.manual_seed(0)
 
-    # Ensure only rank 0 downloads/processes dataset and invalidates the cache first
+    ###
     if local_rank > 0 and dist.is_initialized():
         dist.barrier()
-
-    # Load finetune dataset — build combined vocab if using pretrain_raw/ (either pretraining or loading checkpoint)
-    need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
-    if need_pretrain_vocab:
-        finetune_smiles = pd.read_csv("raw_data/chembl2k/raw/assays.csv.gz")["smiles"].tolist()
-        pretrain_ds = PretrainSMILESDataset(root="./raw_data", n_augmentations=cli.n_augmentations)
-        
-        chembl_cache = "./raw_data/chembl2k/processed/processed_smiles_L128.pt"
-        if os.path.exists(chembl_cache):
-            try:
-                _, _, cached_vocab = torch.load(chembl_cache, weights_only=False)
-                # Only invalidate the old local cache if it doesn't match the pretrain vocab length
-                if len(cached_vocab) != len(pretrain_ds.vocab):
-                    if local_rank <= 0:
-                        print("Vocab size changed — invalidating old local ChEMBL2K cache to align with pretrained vocab!")
-                    os.remove(chembl_cache)
-            except Exception:
-                pass
-        args._vocab_override = pretrain_ds.vocab
-
-    # Rank 0 builds/caches the dataset. Ranks > 0 will instantly load the cached version.
-    dataset = get_data(args, "./raw_data", transform="smiles")
-
-    # DDP sync: Rank 0 arrives here and releases Ranks > 0 from the barrier above
+    dataset = get_data(args.dataset,  args.n_augmentations, "./raw_data", transform="smiles")
     if local_rank == 0 and dist.is_initialized():
         dist.barrier()
-
-    # Inject combined vocab into dataset if using pretrain_raw/ vocab
-    if need_pretrain_vocab:
-        dataset.vocab        = pretrain_ds.vocab
-        dataset.vocab_size   = pretrain_ds.vocab_size
-        dataset.pad_token_id = pretrain_ds.pad_token_id
-        dataset.mask_token_id = pretrain_ds.mask_token_id
 
     split   = dataset.get_idx_split()
 
@@ -150,46 +208,53 @@ def main():
     valid_sampler = DistributedSampler(valid_sub, shuffle=False) if dist.is_initialized() else None
     test_sampler  = DistributedSampler(test_sub, shuffle=False) if dist.is_initialized() else None
 
-    train_loader = DataLoader(train_sub, batch_size=per_gpu_batch, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=cli.num_workers)
-    valid_loader = DataLoader(valid_sub, batch_size=per_gpu_batch, shuffle=False, sampler=valid_sampler, num_workers=cli.num_workers)
-    test_loader  = DataLoader(test_sub,  batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler, num_workers=cli.num_workers)
+    train_loader = DataLoader(train_sub, batch_size=per_gpu_batch, shuffle=(train_sampler is None),
+                              sampler=train_sampler, num_workers=cli.num_workers)
+    valid_loader = DataLoader(valid_sub, batch_size=per_gpu_batch, shuffle=False, sampler=valid_sampler,
+                              num_workers=cli.num_workers)
+    test_loader = DataLoader(test_sub, batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler,
+                             num_workers=cli.num_workers)
+
+    # TODO
+    if args.pretrain_dataset is None:
+        pretrain_loader = train_loader
+    else:
+        if local_rank > 0 and dist.is_initialized():
+            dist.barrier()
+        pretrain_dataset = get_data(args.pretrain_dataset, args.n_augmentations, "./raw_data", transform="smiles")
+        if local_rank == 0 and dist.is_initialized():
+            dist.barrier()
+        pretrain_sampler = DistributedSampler(pretrain_dataset, shuffle=True) if dist.is_initialized() else None
+        pretrain_loader = DataLoader(pretrain_dataset, batch_size=per_gpu_batch, shuffle=(pretrain_sampler is None),
+                              sampler=pretrain_sampler, num_workers=args.num_workers)
+
+    if local_rank > 0 and dist.is_initialized():
+        dist.barrier()
+    need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
+    if need_pretrain_vocab:
+        smiles_pretrain_dataset = load_smiles_pretrain_dataset(args, cli, local_rank)
+        dataset.vocab        = smiles_pretrain_dataset.vocab
+        dataset.vocab_size   = smiles_pretrain_dataset.vocab_size
+        dataset.pad_token_id = smiles_pretrain_dataset.pad_token_id
+        dataset.mask_token_id = smiles_pretrain_dataset.mask_token_id
+    if local_rank == 0 and dist.is_initialized():
+        dist.barrier()
 
     args.steps = len(train_loader)
 
-    vocab_size = pretrain_ds.vocab_size if need_pretrain_vocab else dataset.vocab_size
-    pad_id     = pretrain_ds.pad_token_id if need_pretrain_vocab else dataset.pad_token_id
-    mask_id    = pretrain_ds.mask_token_id if need_pretrain_vocab else dataset.mask_token_id
-
-    encoder = Encoder(
-        V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
-        gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
-        vocab_size=vocab_size, mask_token_id=mask_id, pad_token_id=pad_id,
-    ).to(device)
-
-    fp_decoder        = FingerprintDecoder(d=256).to(device) if cli.with_fp_decoder else None
-    ge_decoder     = GEDecoder(d=256, out_dim=dataset.ge_features.shape[1]).to(device) if cli.with_ge_decoder else None
-    cp_decoder     = CPDecoder(d=256, out_dim=dataset.cp_features.shape[1]).to(device) if cli.with_cp_decoder else None
-    smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
-    head           = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
-
-    if dist.is_initialized():
-        encoder = DDP(encoder, device_ids=[local_rank], output_device=local_rank)
-        if fp_decoder is not None: fp_decoder = DDP(fp_decoder, device_ids=[local_rank], output_device=local_rank)
-        if ge_decoder is not None: ge_decoder = DDP(ge_decoder, device_ids=[local_rank], output_device=local_rank)
-        if cp_decoder is not None: cp_decoder = DDP(cp_decoder, device_ids=[local_rank], output_device=local_rank)
-        if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank], output_device=local_rank)
-        head = DDP(head, device_ids=[local_rank], output_device=local_rank)
+    encoder = prepare_encoder(cli, dataset, device, local_rank)
+    decoders = prepare_decoders(cli, dataset, device, local_rank)
+    decoders_str = ", ".join(name for name, obj in decoders.items() if obj is not None)
+    fp_decoder = decoders['fp_decoder'],
+    ge_decoder = decoders['ge_decoder']
+    cp_decoder = decoders['cp_decoders']
+    smiles_decoder = decoders['smiles_decoder']
+    head = decoders['head']
 
     print(f"Device: {device}")
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
-    decoders_str = (
-            ", ".join(filter(None, [
-                "FP" if fp_decoder else None,
-                "GE" if ge_decoder else None,
-                "CP" if cp_decoder else None,
-                "SMILES" if smiles_decoder else None]
-                             )) or "none")
+
     mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
     print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
@@ -197,11 +262,12 @@ def main():
         unwrap(encoder).load_state_dict(torch.load(cli.load_pretrained, map_location=device))
         print(f"Loaded pretrained encoder from {cli.load_pretrained}")
 
+    # FIRST PRETRAINING ON LARGE DATASET OF SMILES
     if cli.pretrain_on_pretrain_raw:
-        pre_sampler = DistributedSampler(pretrain_ds, shuffle=True) if dist.is_initialized() else None
-        pretrain_loader = DataLoader(pretrain_ds, batch_size=per_gpu_batch, shuffle=(pre_sampler is None), sampler=pre_sampler, num_workers=cli.num_workers)
-        args.steps = len(pretrain_loader)
-        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, pretrain_loader, args, cli.pretrain_epochs)
+        smiles_pretrain_sampler = DistributedSampler(smiles_pretrain_dataset, shuffle=True) if dist.is_initialized() else None
+        smiles_pretrain_loader = DataLoader(smiles_pretrain_dataset, batch_size=per_gpu_batch, shuffle=(smiles_pretrain_sampler is None), sampler=smiles_pretrain_sampler, num_workers=cli.num_workers)
+        args.steps = len(smiles_pretrain_loader)
+        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, smiles_pretrain_loader, args, cli.pretrain_epochs)
         args.steps = len(train_loader)  # reset for finetune
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
@@ -217,10 +283,11 @@ def main():
             head, ge_decoder, cp_decoder, smiles_decoder
         )
     else:
+        # SECOND PRETRAINING ON ALL MODALITIES
         if cli.pretrain_epochs > 0:
             pretrain(
                 encoder,
-                train_loader,
+                pretrain_loader,
                 args, cli.pretrain_epochs,
                 fp_decoder, ge_decoder, cp_decoder, smiles_decoder)
 

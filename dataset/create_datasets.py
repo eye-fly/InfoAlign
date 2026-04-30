@@ -50,19 +50,18 @@ def download_finetune_data(data_name, root_path):
         print("If the issue persists, you may need to log in using `huggingface-cli login`")
 
 
-def get_data(args, load_path, transform="fingerprint"):
+def get_data(dataset, n_aug, load_path, transform="fingerprint"):
     assert transform in [
         "fingerprint",
         "smiles",
     ]
 
-    n_aug = getattr(args, "n_augmentations", 0)
 
-    if args.dataset.startswith("finetune"):
-        data_name = args.dataset.split("-")[1]
+    if dataset.startswith("finetune"):
+        data_name = dataset.split("-")[1]
         download_finetune_data(data_name, load_path)
     else:
-        data_name = args.dataset
+        data_name = dataset
 
     return PredictionMoleculeDataset(
         name=data_name, root=load_path, transform=transform,
