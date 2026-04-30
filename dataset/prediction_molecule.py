@@ -298,6 +298,7 @@ class PredictionMoleculeDataset(object):
         ge_csv  = osp.join(raw_dir, "GE.csv.gz")
         ge_npz  = osp.join(raw_dir, "GE_feature.npz")
         if not (osp.exists(ge_csv) and osp.exists(ge_npz)):
+            print("NO GE DATA")
             return None
 
         ge_index = pd.read_csv(ge_csv)
@@ -326,10 +327,11 @@ class PredictionMoleculeDataset(object):
         npz = osp.join(raw_dir, "CP-JUMP_feature.npz")
 
         if not (osp.exists(csv) and osp.exists(npz)):
+            print("NO CP DATA")
             return None
 
         index = pd.read_csv(csv)
-        matrix = np.load(npz)["data"].astype(np.float32)  # (631, 978)
+        matrix = np.load(npz)["data"].astype(np.float32)  # (2553, 966)
 
         # inchikey → list of row indices in matrix (positional, multiple cell lines possible)
         key_to_rows = {}
