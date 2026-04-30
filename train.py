@@ -167,8 +167,8 @@ def main():
     ).to(device)
 
     fp_decoder        = FingerprintDecoder(d=256).to(device) if cli.with_fp_decoder else None
-    ge_decoder     = GEDecoder(d=256).to(device) if cli.with_ge_decoder else None
-    cp_decoder     = CPDecoder(d=256).to(device) if cli.with_cp_decoder else None
+    ge_decoder     = GEDecoder(d=256, out_dim=dataset.ge_features.shape[1]).to(device) if cli.with_ge_decoder else None
+    cp_decoder     = CPDecoder(d=256, out_dim=dataset.cp_features.shape[1]).to(device) if cli.with_cp_decoder else None
     smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
     head           = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
 
