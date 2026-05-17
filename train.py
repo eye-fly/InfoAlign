@@ -37,6 +37,7 @@ from models.decoder import FingerprintDecoder, GEDecoder, SMILESDecoder, CPDecod
 from models.classification_head import ClassificationHead
 from utils.train_funcs import unwrap, pretrain, joint_train, finetune
 from rdkit import RDLogger
+
 RDLogger.DisableLog('rdApp.*')
 
 
@@ -58,6 +59,7 @@ def load_smiles_pretrain_dataset(args, cli, local_rank):
     args._vocab_override = pretrain_ds.vocab
     return pretrain_ds
 
+
 def prepare_encoder(cli, dataset, device, local_rank):
     encoder = Encoder(
         V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
@@ -70,6 +72,7 @@ def prepare_encoder(cli, dataset, device, local_rank):
 
     return encoder
 
+
 def prepare_decoders(cli, dataset, device, local_rank):
     fp_decoder = FingerprintDecoder(d=256).to(device) if cli.with_fp_decoder else None
     ge_decoder = GEDecoder(d=256, out_dim=dataset.ge_features.shape[1]).to(device) if cli.with_ge_decoder else None
@@ -81,7 +84,8 @@ def prepare_decoders(cli, dataset, device, local_rank):
         if fp_decoder is not None: fp_decoder = DDP(fp_decoder, device_ids=[local_rank], output_device=local_rank)
         if ge_decoder is not None: ge_decoder = DDP(ge_decoder, device_ids=[local_rank], output_device=local_rank)
         if cp_decoder is not None: cp_decoder = DDP(cp_decoder, device_ids=[local_rank], output_device=local_rank)
-        if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank], output_device=local_rank)
+        if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank],
+                                                            output_device=local_rank)
         head = DDP(head, device_ids=[local_rank], output_device=local_rank)
 
     return {
@@ -123,6 +127,83 @@ def prepare_finetune_dataloaders(args, local_rank):
     test_loader = DataLoader(test_sub, batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler,
                              num_workers=args.num_workers)
     return train_loader, valid_loader, test_loader
+
+
+def get_datasets(args, cli, local_rank=None):
+    smiles_pretrain_dataset = None
+    pretrain_dataset = None
+    dataset = None
+
+    if local_rank > 0 and dist.is_initialized():
+        dist.barrier()
+
+    # Get smiles_pretrain_dataset
+    need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
+    if need_pretrain_vocab:
+        smiles_pretrain_dataset = load_smiles_pretrain_dataset(args, cli, local_rank)
+
+    # Get pretrain dataset
+    if args.pretrain_dataset is not None:
+        vocab = None
+        if smiles_pretrain_dataset is not None:
+            vocab = smiles_pretrain_dataset.vocab
+        pretrain_dataset = get_data(args.pretrain_dataset, args.n_augmentations, vocab, "./raw_data",
+                                    transform="smiles")
+
+    # Get finetune dataset
+    # vocab = None
+    if args.pretrain_dataset is not None:
+        vocab = pretrain_dataset.vocab
+    if smiles_pretrain_dataset is not None:
+        vocab = smiles_pretrain_dataset.vocab
+    dataset = get_data(args.dataset, args.n_augmentations, vocab, "./raw_data", transform="smiles")
+
+    if local_rank == 0 and dist.is_initialized():
+        dist.barrier()
+
+    return smiles_pretrain_dataset, pretrain_dataset, dataset
+
+
+def get_loaders(args, cli, smiles_pretrain_dataset, pretrain_dataset, dataset):
+    smiles_pretrain_loader = None
+
+    split = dataset.get_idx_split()
+    args.num_trained = len(split["train"])
+    args.task_type = "classification"
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    per_gpu_batch = max(1, cli.batch_size // world_size)
+
+    train_sub = Subset(dataset, split["train"])
+    valid_sub = Subset(dataset, split["valid"])
+    test_sub = Subset(dataset, split["test"])
+
+    train_sampler = DistributedSampler(train_sub, shuffle=True) if dist.is_initialized() else None
+    valid_sampler = DistributedSampler(valid_sub, shuffle=False) if dist.is_initialized() else None
+    test_sampler = DistributedSampler(test_sub, shuffle=False) if dist.is_initialized() else None
+
+    train_loader = DataLoader(train_sub, batch_size=per_gpu_batch, shuffle=(train_sampler is None),
+                              sampler=train_sampler, num_workers=cli.num_workers)
+    valid_loader = DataLoader(valid_sub, batch_size=per_gpu_batch, shuffle=False, sampler=valid_sampler,
+                              num_workers=cli.num_workers)
+    test_loader = DataLoader(test_sub, batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler,
+                             num_workers=cli.num_workers)
+
+    if pretrain_dataset is None:
+        pretrain_loader = train_loader
+    else:
+        pretrain_sampler = DistributedSampler(pretrain_dataset, shuffle=True) if dist.is_initialized() else None
+        pretrain_loader = DataLoader(pretrain_dataset, batch_size=per_gpu_batch, shuffle=(pretrain_sampler is None),
+                                     sampler=pretrain_sampler, num_workers=args.num_workers)
+
+    if smiles_pretrain_dataset is not None:
+        smiles_pretrain_sampler = DistributedSampler(smiles_pretrain_dataset,
+                                                     shuffle=True) if dist.is_initialized() else None
+        smiles_pretrain_loader = DataLoader(smiles_pretrain_dataset, batch_size=per_gpu_batch,
+                                            shuffle=(smiles_pretrain_sampler is None), sampler=smiles_pretrain_sampler,
+                                            num_workers=cli.num_workers)
+
+    return smiles_pretrain_loader, pretrain_loader, train_loader, test_loader, valid_loader
+
 
 def main():
     parser = argparse.ArgumentParser(description="InfoAlign: Multimodal Pretraining & Finetuning Pipeline")
@@ -185,63 +266,14 @@ def main():
 
     torch.manual_seed(0)
 
-    ###
-    if local_rank > 0 and dist.is_initialized():
-        dist.barrier()
-    dataset = get_data(args.dataset,  args.n_augmentations, "./raw_data", transform="smiles")
-    if local_rank == 0 and dist.is_initialized():
-        dist.barrier()
+    # Datasets for different stages of training
+    smiles_pretrain_dataset, pretrain_dataset, dataset = get_datasets(args, cli, local_rank)
 
-    split   = dataset.get_idx_split()
+    # Loaders
+    smiles_pretrain_loader, pretrain_loader, train_loader, test_loader, valid_loader = (
+        get_loaders(args, cli, smiles_pretrain_dataset, pretrain_dataset, dataset))
 
-    args.num_trained = len(split["train"])
-    args.task_type   = "classification"
-
-    train_sub = Subset(dataset, split["train"])
-    valid_sub = Subset(dataset, split["valid"])
-    test_sub  = Subset(dataset, split["test"])
-
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-    per_gpu_batch = max(1, cli.batch_size // world_size)
-
-    train_sampler = DistributedSampler(train_sub, shuffle=True) if dist.is_initialized() else None
-    valid_sampler = DistributedSampler(valid_sub, shuffle=False) if dist.is_initialized() else None
-    test_sampler  = DistributedSampler(test_sub, shuffle=False) if dist.is_initialized() else None
-
-    train_loader = DataLoader(train_sub, batch_size=per_gpu_batch, shuffle=(train_sampler is None),
-                              sampler=train_sampler, num_workers=cli.num_workers)
-    valid_loader = DataLoader(valid_sub, batch_size=per_gpu_batch, shuffle=False, sampler=valid_sampler,
-                              num_workers=cli.num_workers)
-    test_loader = DataLoader(test_sub, batch_size=per_gpu_batch, shuffle=False, sampler=test_sampler,
-                             num_workers=cli.num_workers)
-
-    # TODO
-    if args.pretrain_dataset is None:
-        pretrain_loader = train_loader
-    else:
-        if local_rank > 0 and dist.is_initialized():
-            dist.barrier()
-        pretrain_dataset = get_data(args.pretrain_dataset, args.n_augmentations, "./raw_data", transform="smiles")
-        if local_rank == 0 and dist.is_initialized():
-            dist.barrier()
-        pretrain_sampler = DistributedSampler(pretrain_dataset, shuffle=True) if dist.is_initialized() else None
-        pretrain_loader = DataLoader(pretrain_dataset, batch_size=per_gpu_batch, shuffle=(pretrain_sampler is None),
-                              sampler=pretrain_sampler, num_workers=args.num_workers)
-
-    if local_rank > 0 and dist.is_initialized():
-        dist.barrier()
-    need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
-    if need_pretrain_vocab:
-        smiles_pretrain_dataset = load_smiles_pretrain_dataset(args, cli, local_rank)
-        dataset.vocab        = smiles_pretrain_dataset.vocab
-        dataset.vocab_size   = smiles_pretrain_dataset.vocab_size
-        dataset.pad_token_id = smiles_pretrain_dataset.pad_token_id
-        dataset.mask_token_id = smiles_pretrain_dataset.mask_token_id
-    if local_rank == 0 and dist.is_initialized():
-        dist.barrier()
-
-    args.steps = len(train_loader)
-
+    ### GET ENCODER AND DECODERS
     encoder = prepare_encoder(cli, dataset, device, local_rank)
     decoders = prepare_decoders(cli, dataset, device, local_rank)
     decoders_str = ", ".join(name for name, obj in decoders.items() if obj is not None)
@@ -252,9 +284,9 @@ def main():
     head = decoders['head']
 
     print(f"Device: {device}")
+    split = dataset.get_idx_split()
     print(f"Train/valid/test: {len(split['train'])}/{len(split['valid'])}/{len(split['test'])}")
     print(f"Pretrain epochs: {cli.pretrain_epochs}  |  Finetune epochs: {cli.finetune_epochs}")
-
     mode = "joint" if cli.joint else ("frozen" if not cli.no_freeze else "e2e")
     print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
@@ -264,11 +296,8 @@ def main():
 
     # FIRST PRETRAINING ON LARGE DATASET OF SMILES
     if cli.pretrain_on_pretrain_raw:
-        smiles_pretrain_sampler = DistributedSampler(smiles_pretrain_dataset, shuffle=True) if dist.is_initialized() else None
-        smiles_pretrain_loader = DataLoader(smiles_pretrain_dataset, batch_size=per_gpu_batch, shuffle=(smiles_pretrain_sampler is None), sampler=smiles_pretrain_sampler, num_workers=cli.num_workers)
-        args.steps = len(smiles_pretrain_loader)
-        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, smiles_pretrain_loader, args, cli.pretrain_epochs)
-        args.steps = len(train_loader)  # reset for finetune
+        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, smiles_pretrain_loader, args,
+                 cli.pretrain_epochs)
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
             if local_rank <= 0:

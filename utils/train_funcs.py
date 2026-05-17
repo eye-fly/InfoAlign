@@ -327,9 +327,10 @@ def joint_train(encoder,
                 head, ge_decoder, cp_decoder, smiles_decoder,
                 ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25, cls_lambda=1.0):
     device = args.device
+    steps = len(train_loader)
     params = extract_decoder_params(encoder, decoders=[ge_decoder, cp_decoder, smiles_decoder])
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * steps)
 
     print(f"\n{'=' * 50}")
     print(f"Joint training (encoder + GE decoder + head) for {epochs} epochs")
@@ -362,12 +363,13 @@ def pretrain(encoder,
              train_loader,
              args, epochs,
              decoder, ge_decoder, cp_decoder, smiles_decoder):
+    steps = len(train_loader)
     if hasattr(train_loader.sampler, "set_epoch"):
         train_loader.sampler.set_epoch(0)
     params = extract_decoder_params(encoder=encoder, decoders=[decoder, ge_decoder, cp_decoder, smiles_decoder])
 
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * steps)
     train_loaders = {"train_iter": iter(train_loader), "train_loader": train_loader}
 
     print(f"\n{'=' * 50}")

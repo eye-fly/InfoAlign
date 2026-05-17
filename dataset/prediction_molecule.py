@@ -157,7 +157,7 @@ class PredictionMoleculeDataset(object):
         aug_tag = f"_aug{n_aug}" if n_aug > 0 else ""
         cache_path = osp.join(processed_dir, f"processed_smiles_L{max_len}{suffix}{aug_tag}.pt")
 
-        if osp.exists(cache_path):
+        if osp.exists(cache_path) and vocab is None:
             x_list, y_list, vocab, aug_factor = torch.load(cache_path, weights_only=False)
         else:
             from .smiles_tokenizer import build_vocab as _build_vocab, encode
@@ -235,26 +235,6 @@ class PredictionMoleculeDataset(object):
         if cp is not None and self._aug_factor > 1:
             cp = cp.repeat_interleave(self._aug_factor, dim=0)
         self.cp_features = cp
-
-    def prepare_smiles(self):
-        assert os.path.exists(
-            self.raw_data
-        ), f" {self.raw_data} assays.csv.gz does not exist"
-        data_df = pd.read_csv(self.raw_data)
-
-        x_list = []
-        y_list = []
-        for idx, row in data_df.iterrows():
-            smiles = row["smiles"]
-            x_list.append(smiles)
-            y = []
-            for col in range(self.start_column, len(row)):
-                y.append(float(row.iloc[col]))
-            y = torch.tensor(y, dtype=torch.float32)
-            y_list.append(y)
-
-        self.data = x_list
-        self.labels = y_list
 
     def prepare_fingerprints(self):
         assert os.path.exists(
