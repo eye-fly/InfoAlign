@@ -18,6 +18,11 @@ class PredictionMoleculeDataset(object):
         self.cp_features = None
         self.ge_features = None
 
+        # Key that joins data from different modalities
+        self.data_key = 'inchikey'
+        if name == 'chembl2k':
+            self.data_key = 'pert_id'
+
         assert transform in [
             "fingerprint",
             "smiles",
@@ -291,12 +296,12 @@ class PredictionMoleculeDataset(object):
         # inchikey → list of row indices in matrix (positional, multiple cell lines possible)
         key_to_rows = {}
         for i, row in index.iterrows():
-            key_to_rows.setdefault(row["inchikey"], []).append(i)
+            key_to_rows.setdefault(row[self.data_key], []).append(i)
 
         N = len(data_df)
         out = np.full((N, matrix.shape[1]), np.nan, dtype=np.float32)
         for i, (_, row) in enumerate(data_df.iterrows()):
-            key = row.get("inchikey", None)
+            key = row.get(self.data_key, None)
             if key is not None and key in key_to_rows:
                 rows = key_to_rows[key]
                 out[i] = matrix[rows].mean(axis=0)
