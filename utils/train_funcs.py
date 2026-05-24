@@ -86,7 +86,7 @@ def update_loss(decoder, z, decoder_lambda, losses, targets=None, mask=None, x_t
     if targets is not None:
         loss = decoder.loss(z, targets=targets)
     elif mask is not None:
-        loss = decoder.loss(z, mask=mask, x_target=x_target)
+        loss = decoder.loss(z, mask=mask, original_tokens=x_target)
     losses.update(loss.item())
     return decoder_lambda * loss
 
@@ -337,10 +337,10 @@ def joint_train(encoder,
 
     best_valid, best_test, best_epoch = 0.0, 0.0, 0
     for epoch in range(epochs):
-        train_loaders, loss, components = (
+        train_loader, loss, components = (
             joint_train_one_epoch(args,
                                   encoder,
-                                  train_loader, valid_loader, test_loader,
+                                  train_loader,
                                   scheduler, optimizer,
                                   epochs, epoch,
                                   head, ge_decoder, cp_decoder, smiles_decoder,

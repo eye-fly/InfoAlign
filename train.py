@@ -14,7 +14,9 @@ Usage:
 from datetime import datetime
 import sys
 import warnings
+import random
 
+import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -65,6 +67,7 @@ def main():
     parser.add_argument("--mask-prob-end",   type=float, default=0.15, help="Ending probability for token masking curriculum (linearly interpolated over epochs)")
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
     parser.add_argument("--n-augmentations", type=int,   default=0, help="Number of SMILES enumerations per molecule")
+    parser.add_argument("--seed",            type=int,   default=0, help="Random seed for reproducibility")
     cli = parser.parse_args()
 
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -95,7 +98,14 @@ def main():
     args.device      = device
     args.gpu_id      = cli.gpu_id
 
-    torch.manual_seed(0)
+    # Deterministic seeding
+    seed = cli.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Ensure only rank 0 downloads/processes dataset and invalidates the cache first
     if local_rank > 0 and dist.is_initialized():
@@ -194,14 +204,26 @@ def main():
     print(f"Decoders: {decoders_str}  |  Mode: {mode}  |  Head: {cli.head_type}")
 
     if cli.load_pretrained:
-        unwrap(encoder).load_state_dict(torch.load(cli.load_pretrained, map_location=device))
-        print(f"Loaded pretrained encoder from {cli.load_pretrained}")
+        ckpt = torch.load(cli.load_pretrained, map_location=device)
+        ckpt_vocab_size = ckpt["encoder.embedding.weight"].shape[0]
+        if ckpt_vocab_size != vocab_size:
+            print(f"Checkpoint vocab_size={ckpt_vocab_size} differs from current model ({vocab_size}) — rebuilding encoder to match checkpoint.")
+            vocab_size = ckpt_vocab_size
+            encoder = Encoder(
+                V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
+                gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
+                vocab_size=ckpt_vocab_size, mask_token_id=mask_id, pad_token_id=pad_id,
+            ).to(device)
+            if dist.is_initialized():
+                encoder = DDP(encoder, device_ids=[local_rank], output_device=local_rank)
+        unwrap(encoder).load_state_dict(ckpt)
+        print(f"Loaded pretrained encoder from {cli.load_pretrained} (vocab_size={ckpt_vocab_size})")
 
     if cli.pretrain_on_pretrain_raw:
         pre_sampler = DistributedSampler(pretrain_ds, shuffle=True) if dist.is_initialized() else None
         pretrain_loader = DataLoader(pretrain_ds, batch_size=per_gpu_batch, shuffle=(pre_sampler is None), sampler=pre_sampler, num_workers=cli.num_workers)
         args.steps = len(pretrain_loader)
-        pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, pretrain_loader, args, cli.pretrain_epochs)
+        pretrain(encoder, pretrain_loader, args, cli.pretrain_epochs, fp_decoder, ge_decoder, cp_decoder, smiles_decoder)
         args.steps = len(train_loader)  # reset for finetune
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
