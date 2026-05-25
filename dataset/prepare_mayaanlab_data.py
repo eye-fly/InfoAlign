@@ -35,9 +35,16 @@ def main():
     This will reformat to proper files
     :return:
     """
+    os.chdir('..')
     smiles = pd.read_csv(FOLDER_IN + SMILES_IN)
     gene_expression = pd.read_csv(FOLDER_IN + GE_IN)
     cell_profile = pd.read_csv(FOLDER_IN + CP_IN)
+
+    smiles = smiles.dropna(subset=["SMILES"])
+    smiles = smiles[smiles["SMILES"].apply(lambda x: isinstance(x, str))]
+
+    gene_expression = gene_expression.dropna()
+    cell_profile = cell_profile.dropna()
 
     if not os.path.exists(FOLDER_OUT):
         os.makedirs(FOLDER_OUT)

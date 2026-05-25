@@ -14,6 +14,11 @@ Test command to check for glitches on finetune-chembl2k.
 python train.py --dataset finetune-chembl2k --with-ge-decoder --with-cp-decoder --cpu-training --pretrain-epochs 1 --finetune-epochs 1
 ```
 
+Test command for pretraining with mayaanlab data.
+```bash
+python train.py --pretrain-dataset mayaanlab --dataset finetune-chembl2k --with-ge-decoder --with-cp-decoder --cpu-training --pretrain-epochs 1 --finetune-epochs 1
+```
+
 The ChEMBL dataset is downloaded automatically from HuggingFace.
 Morgan fingerprint encoding (2048-bit, radius=2) is triggered by `get_data()` — see `dataset/prediction_molecule.py:prepare_fingerprints()`.
 

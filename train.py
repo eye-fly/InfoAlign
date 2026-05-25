@@ -140,6 +140,7 @@ def get_datasets(args, cli, local_rank=None):
     need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
     if need_pretrain_vocab:
         smiles_pretrain_dataset = load_smiles_pretrain_dataset(args, cli, local_rank)
+        print("Loaded smiles pretrain dataset")
     vocab = None
 
     # Get pretrain dataset
@@ -148,6 +149,7 @@ def get_datasets(args, cli, local_rank=None):
             vocab = smiles_pretrain_dataset.vocab
         pretrain_dataset = get_data(args.pretrain_dataset, args.n_augmentations, vocab, "./raw_data",
                                     transform="smiles")
+        print('Loaded pretrain dataset')
 
     # Get finetune dataset
     if args.pretrain_dataset is not None:

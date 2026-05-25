@@ -20,8 +20,6 @@ class PredictionMoleculeDataset(object):
 
         # Key that joins data from different modalities
         self.data_key = 'inchikey'
-        if name == 'mayaanlab':
-            self.data_key = 'pert_id'
 
         assert transform in [
             "fingerprint",
@@ -52,6 +50,8 @@ class PredictionMoleculeDataset(object):
             self.num_tasks = 6
             self.start_column = 4
             self.eval_metric = "avg_mae"
+        elif name == 'mayaanlab':
+            self.data_key = 'pert_id'
         else:
             meta_path = osp.join(self.folder, "raw", "meta.json")
             if os.path.exists(meta_path):
@@ -168,13 +168,14 @@ class PredictionMoleculeDataset(object):
             from .smiles_tokenizer import build_vocab as _build_vocab, encode
             print("Tokenizing SMILES...")
             data_df = pd.read_csv(self.raw_data)
-            smiles_list = data_df["smiles"].tolist()
+            smiles_column = 'smiles' if 'smiles' in data_df else 'SMILES'
+            smiles_list = data_df[smiles_column].tolist()
             if vocab is None:
                 vocab = _build_vocab(smiles_list)
 
             x_list, y_list = [], []
             for _, row in data_df.iterrows():
-                smi = row["smiles"]
+                smi = row[smiles_column]
                 ids, _ = encode(smi, vocab, max_len)
                 y = torch.tensor([float(row.iloc[col]) for col in range(self.start_column, len(row))], dtype=torch.float32)
 
@@ -247,6 +248,8 @@ class PredictionMoleculeDataset(object):
         ), f" {self.raw_data} assays.csv.gz does not exist"
         data_df = pd.read_csv(self.raw_data)
 
+        smiles_column = 'smiles' if 'smiles' in data_df else 'SMILES'
+
         processed_dir = osp.join(self.folder, "processed")
         os.makedirs(processed_dir, exist_ok=True)
 
@@ -258,7 +261,7 @@ class PredictionMoleculeDataset(object):
             x_list = []
             y_list = []
             for idx, row in data_df.iterrows():
-                smiles = row["smiles"]
+                smiles = row[smiles_column]
                 mol = Chem.MolFromSmiles(smiles)
                 x = torch.tensor(
                     list(AllChem.GetMorganFingerprintAsBitVect(mol, 2)),
