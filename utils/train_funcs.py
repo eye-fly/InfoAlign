@@ -246,7 +246,7 @@ def joint_train_one_epoch(args,
 
 
 def train_one_epoch(
-        args,
+        args, steps,
         encoder: Encoder,
         train_loaders,
         optimizer,
@@ -264,11 +264,11 @@ def train_one_epoch(
     smi_losses = AverageMeter()
 
     if not args.no_print:
-        p_bar = tqdm(range(args.steps))
+        p_bar = tqdm(range(steps))
     device = args.device
 
     encoder.train()
-    for batch_idx in range(args.steps):
+    for batch_idx in range(steps):
         end = time.time()
         try:
             batch = next(train_loaders["train_iter"])
@@ -291,7 +291,7 @@ def train_one_epoch(
 
         if not args.no_print:
             desc = (f"Epoch {epoch + 1}  "
-                    f"[{batch_idx + 1}/{args.steps}]  "
+                    f"[{batch_idx + 1}/{steps}]  "
                     f"loss={total_losses.avg:.3f}  ")
             for name, losses in [
                 ("enc", enc_losses),
@@ -384,7 +384,7 @@ def pretrain(encoder,
         unwrap(encoder).mask_prob = current_mask
 
         train_loaders, loss, components = train_one_epoch(
-            args, encoder, train_loaders, optimizer, scheduler, epoch,
+            args, steps, encoder, train_loaders, optimizer, scheduler, epoch,
             fp_decoder=decoder, ge_decoder=ge_decoder, cp_decoder=cp_decoder, smiles_decoder=smiles_decoder,
         )
         print_encoder_data(encoder, epoch, epochs, loss, components)
@@ -395,6 +395,7 @@ def finetune(encoder, freeze_encoder,
              args, epochs,
              head):
     device = args.device
+    steps = len(train_loader)
     if freeze_encoder:
         for p in encoder.parameters():
             p.requires_grad = False
@@ -405,7 +406,7 @@ def finetune(encoder, freeze_encoder,
         params = list(head.parameters()) + list(encoder.parameters())
 
     optimizer = optim.Adam(params, lr=args.lr, weight_decay=args.wdecay)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * args.steps)
+    scheduler = get_cosine_schedule_with_warmup(optimizer, 0, epochs * steps)
 
     mode = "frozen encoder" if freeze_encoder else "end-to-end"
     print(f"\n{'=' * 50}")
