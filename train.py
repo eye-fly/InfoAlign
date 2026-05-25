@@ -275,7 +275,7 @@ def main():
     encoder = prepare_encoder(cli, dataset, device, local_rank)
     decoders = prepare_decoders(cli, dataset, device, local_rank)
     decoders_str = ", ".join(name for name, obj in decoders.items() if obj is not None)
-    fp_decoder = decoders['fp_decoder'],
+    fp_decoder = decoders['fp_decoder']
     ge_decoder = decoders['ge_decoder']
     cp_decoder = decoders['cp_decoder']
     smiles_decoder = decoders['smiles_decoder']
@@ -302,6 +302,7 @@ def main():
                 torch.save(unwrap(encoder).state_dict(), cli.save_pretrained)
             print(f"Saved pretrained encoder to {cli.save_pretrained}")
 
+    print(fp_decoder)
     if cli.joint:
         best_valid, best_test = joint_train(
             encoder,
