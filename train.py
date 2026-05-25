@@ -64,7 +64,7 @@ def prepare_encoder(cli, dataset, device, local_rank):
     encoder = Encoder(
         V=512, dx=None, d=256, num_heads=8, num_layers=6, K_layers=[1, 3, 5],
         gamma_teacher=0.95, gamma_codebook=0.99, mask_prob=0.15,
-        vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_id, pad_token_id=dataset.pad_id,
+        vocab_size=dataset.vocab_size, mask_token_id=dataset.mask_token_id, pad_token_id=dataset.pad_token_id,
     ).to(device)
 
     if dist.is_initialized():
@@ -132,7 +132,6 @@ def prepare_finetune_dataloaders(args, local_rank):
 def get_datasets(args, cli, local_rank=None):
     smiles_pretrain_dataset = None
     pretrain_dataset = None
-    dataset = None
 
     if local_rank > 0 and dist.is_initialized():
         dist.barrier()
@@ -141,17 +140,16 @@ def get_datasets(args, cli, local_rank=None):
     need_pretrain_vocab = cli.pretrain_on_pretrain_raw or (cli.load_pretrained is not None)
     if need_pretrain_vocab:
         smiles_pretrain_dataset = load_smiles_pretrain_dataset(args, cli, local_rank)
+    vocab = None
 
     # Get pretrain dataset
     if args.pretrain_dataset is not None:
-        vocab = None
         if smiles_pretrain_dataset is not None:
             vocab = smiles_pretrain_dataset.vocab
         pretrain_dataset = get_data(args.pretrain_dataset, args.n_augmentations, vocab, "./raw_data",
                                     transform="smiles")
 
     # Get finetune dataset
-    # vocab = None
     if args.pretrain_dataset is not None:
         vocab = pretrain_dataset.vocab
     if smiles_pretrain_dataset is not None:
@@ -279,7 +277,7 @@ def main():
     decoders_str = ", ".join(name for name, obj in decoders.items() if obj is not None)
     fp_decoder = decoders['fp_decoder'],
     ge_decoder = decoders['ge_decoder']
-    cp_decoder = decoders['cp_decoders']
+    cp_decoder = decoders['cp_decoder']
     smiles_decoder = decoders['smiles_decoder']
     head = decoders['head']
 

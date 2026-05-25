@@ -20,7 +20,7 @@ class PredictionMoleculeDataset(object):
 
         # Key that joins data from different modalities
         self.data_key = 'inchikey'
-        if name == 'chembl2k':
+        if name == 'mayaanlab':
             self.data_key = 'pert_id'
 
         assert transform in [
