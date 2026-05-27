@@ -169,6 +169,9 @@ def get_datasets(args, cli, local_rank=None):
     if local_rank == 0 and dist.is_initialized():
         dist.barrier()
 
+    if pretrain_dataset is None:
+        pretrain_dataset = dataset
+
     return smiles_pretrain_dataset, pretrain_dataset, dataset
 
 

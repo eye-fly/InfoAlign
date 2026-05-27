@@ -9,9 +9,10 @@
 #SBATCH --error=job_error.%j.txt    # Standard error log
 
 # 1. Clean and load the correct environment modules
-module purge
-module load Stages/2025
-module load Python
+module --force purge
+module load Stages/2026
+module load GCCcore/14.3.0
+module load Python/3.13.5
 module load CUDA
 
 # 2. Activate your virtual environment if you have one
