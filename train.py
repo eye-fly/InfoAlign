@@ -14,7 +14,9 @@ Usage:
 from datetime import datetime
 import sys
 import warnings
+import random
 
+import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -243,6 +245,7 @@ def main():
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
     parser.add_argument("--n-augmentations", type=int,   default=0, help="Number of SMILES enumerations per molecule")
     parser.add_argument("--pretrain-dataset", default=None, help="Dataset name to be used as a separate pretraining dataset (if none specified then finetune-dataset is used")
+    parser.add_argument("--seed",            type=int,   default=0, help="Random seed for reproducibility")
     cli = parser.parse_args()
 
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -275,7 +278,14 @@ def main():
     args.gpu_id      = cli.gpu_id
     args.num_workers = cli.num_workers
 
-    torch.manual_seed(0)
+    # Deterministic seeding
+    seed = cli.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     # Datasets for different stages of training
     smiles_pretrain_dataset, pretrain_dataset, dataset = get_datasets(args, cli, local_rank)
