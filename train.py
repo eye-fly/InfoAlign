@@ -78,7 +78,6 @@ def prepare_decoders(cli, dataset, device, local_rank):
     ge_decoder = GEDecoder(d=256, out_dim=dataset.ge_features.shape[1]).to(device) if cli.with_ge_decoder else None
     cp_decoder = CPDecoder(d=256, out_dim=dataset.cp_features.shape[1]).to(device) if cli.with_cp_decoder else None
     smiles_decoder = SMILESDecoder(d=256, vocab_size=dataset.vocab_size).to(device) if cli.with_smiles_decoder else None
-    head = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
 
     if dist.is_initialized():
         if fp_decoder is not None: fp_decoder = DDP(fp_decoder, device_ids=[local_rank], output_device=local_rank)
@@ -86,13 +85,22 @@ def prepare_decoders(cli, dataset, device, local_rank):
         if cp_decoder is not None: cp_decoder = DDP(cp_decoder, device_ids=[local_rank], output_device=local_rank)
         if smiles_decoder is not None: smiles_decoder = DDP(smiles_decoder, device_ids=[local_rank],
                                                             output_device=local_rank)
-        head = DDP(head, device_ids=[local_rank], output_device=local_rank)
 
     return {
         'fp_decoder': fp_decoder,
         'ge_decoder': ge_decoder,
         'cp_decoder': cp_decoder,
-        'smiles_decoder': smiles_decoder,
+        'smiles_decoder': smiles_decoder
+    }
+
+
+def prepare_head(cli, dataset, device, local_rank):
+    head = ClassificationHead(d=256, head_type=cli.head_type, num_tasks=dataset.num_tasks).to(device)
+
+    if dist.is_initialized():
+        head = DDP(head, device_ids=[local_rank], output_device=local_rank)
+
+    return {
         'head': head
     }
 
@@ -275,13 +283,13 @@ def main():
 
     ### GET ENCODER AND DECODERS
     encoder = prepare_encoder(cli, dataset, device, local_rank)
-    decoders = prepare_decoders(cli, dataset, device, local_rank)
+    decoders = prepare_decoders(cli, pretrain_dataset, device, local_rank)
+    head = prepare_head(cli, dataset, device, local_rank)['head']
     decoders_str = ", ".join(name for name, obj in decoders.items() if obj is not None)
     fp_decoder = decoders['fp_decoder']
     ge_decoder = decoders['ge_decoder']
     cp_decoder = decoders['cp_decoder']
     smiles_decoder = decoders['smiles_decoder']
-    head = decoders['head']
 
     print(f"Device: {device}")
     split = dataset.get_idx_split()

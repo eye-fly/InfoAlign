@@ -52,6 +52,8 @@ class PredictionMoleculeDataset(object):
             self.eval_metric = "avg_mae"
         elif name == 'mayaanlab':
             self.data_key = 'pert_id'
+            self.num_tasks = 0
+            self.start_column = 4
         else:
             meta_path = osp.join(self.folder, "raw", "meta.json")
             if os.path.exists(meta_path):
@@ -219,8 +221,9 @@ class PredictionMoleculeDataset(object):
             from rdkit import Chem
             from rdkit.Chem import AllChem
             data_df = pd.read_csv(self.raw_data)
+            smiles_column = 'smiles' if 'smiles' in data_df else 'SMILES'
             fps = torch.stack([
-                torch.tensor(list(AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(row["smiles"]), 2)), dtype=torch.float32)
+                torch.tensor(list(AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(row[smiles_column]), 2)), dtype=torch.float32)
                 for _, row in data_df.iterrows()
             ])
 

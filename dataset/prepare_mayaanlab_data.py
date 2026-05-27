@@ -6,6 +6,7 @@ import os
 
 import numpy as np
 import pandas as pd
+from rdkit import Chem
 
 FOLDER_IN = 'raw_data/mayaanlab/original/'
 SMILES_IN = 'meta_SMILES.csv'
@@ -40,8 +41,33 @@ def main():
     gene_expression = pd.read_csv(FOLDER_IN + GE_IN)
     cell_profile = pd.read_csv(FOLDER_IN + CP_IN)
 
-    smiles = smiles.dropna(subset=["SMILES"])
-    smiles = smiles[smiles["SMILES"].apply(lambda x: isinstance(x, str))]
+    print("=== Cleaning SMILES Data ===")
+    initial_smiles_len = len(smiles)
+    smiles_column = 'SMILES'
+
+    # Remove completely null/NaN rows
+    smiles = smiles.dropna(subset=[smiles_column])
+    nan_removed = initial_smiles_len - len(smiles)
+    print(f"-> Removed {nan_removed} NaN/Null rows.")
+
+    # Ensure every entry is strictly a string
+    prev_len = len(smiles)
+    smiles = smiles[smiles[smiles_column].apply(lambda x: isinstance(x, str))]
+    non_str_removed = prev_len - len(smiles)
+    print(f"-> Removed {non_str_removed} non-string/numerical entries.")
+
+    # Filter out chemically invalid SMILES that break RDKit
+    def is_valid_smiles(smiles_string):
+        if not smiles_string.strip():
+            return False
+        mol = Chem.MolFromSmiles(smiles_string)
+        return mol is not None
+
+    prev_len = len(smiles)
+    smiles = smiles[smiles[smiles_column].apply(is_valid_smiles)]
+    invalid_rdkit_removed = prev_len - len(smiles)
+    print(f"-> Removed {invalid_rdkit_removed} chemically invalid RDKit SMILES.")
+    print(f"Total SMILES rows remaining: {len(smiles)}\n")
 
     gene_expression = gene_expression.dropna()
     cell_profile = cell_profile.dropna()
@@ -57,8 +83,8 @@ def main():
     gene_expression_array = gene_expression.drop(columns=["pert_id"]).values
     cell_profile_array = cell_profile.drop(columns=['pert_id']).values
 
-    np.savez_compressed(FOLDER_OUT + GE_NPZ_OUT, my_array=gene_expression_array)
-    np.savez_compressed(FOLDER_OUT + CP_NPZ_OUT, my_array=cell_profile_array)
+    np.savez_compressed(FOLDER_OUT + GE_NPZ_OUT, data=gene_expression_array)
+    np.savez_compressed(FOLDER_OUT + CP_NPZ_OUT, data=cell_profile_array)
 
 
 
