@@ -96,7 +96,7 @@ def train_step(
         encoder, enc_losses,
         smiles_decoder_data: tuple[nn.Module, float, AverageMeter, str],
         decoders_data: list[tuple[nn.Module, float, AverageMeter, str]],
-        total_losses):
+        total_losses, if_random_decoder_update=False):
     smiles_decoder, smiles_lambda, smi_losses, _ = smiles_decoder_data
     data = batch['data'].to(device)
     optimizer.zero_grad()
@@ -114,11 +114,18 @@ def train_step(
     enc_losses.update(enc_loss.item())
 
     z = encoder(data)
-
-    for _decoder, _decoder_lambda, losses, features_name in decoders_data:
+    if if_random_decoder_update:
+        nr_of_decoders = len(decoders_data)
+        idx = torch.randint(nr_of_decoders, (1,))
+        _decoder, _decoder_lambda, losses, features_name = decoders_data[idx]
         if features_name in batch:
             features = batch[features_name].to(device, dtype=torch.float32)
-            loss += update_loss(_decoder, z, _decoder_lambda, losses, features)
+            loss += update_loss(_decoder, z, _decoder_lambda*nr_of_decoders, losses, features)
+    else:
+        for _decoder, _decoder_lambda, losses, features_name in decoders_data:
+            if features_name in batch:
+                features = batch[features_name].to(device, dtype=torch.float32)
+                loss += update_loss(_decoder, z, _decoder_lambda, losses, features)
 
     loss.backward()
     optimizer.step()
@@ -205,7 +212,7 @@ def joint_train_one_epoch(args,
                           scheduler, optimizer,
                           epochs, epoch,
                           head, ge_decoder, cp_decoder, smiles_decoder,
-                          cls_lambda=1.0, ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25):
+                          cls_lambda=1.0, ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25, if_random_decoder_update=False):
     # Meters
     total_losses = AverageMeter()
     enc_losses = AverageMeter()
@@ -235,7 +242,7 @@ def joint_train_one_epoch(args,
                        (ge_decoder, ge_lambda, ge_losses, "ge_features"),
                        (cp_decoder, cp_lambda, cp_losses, "cp_features")
                    ],
-                   total_losses)
+                   total_losses, if_random_decoder_update=if_random_decoder_update)
 
     component_losses = {}
     for name, losses in [("enc", enc_losses), ("ge", ge_losses), ("cp", cp_losses), ("smi", smi_losses)]:
@@ -253,7 +260,7 @@ def train_one_epoch(
         scheduler,
         epoch,
         fp_decoder=None, ge_decoder=None, smiles_decoder=None, cp_decoder=None,
-        fp_lambda=0.25, ge_lambda=0.25, smiles_lambda=0.25, cp_lambda=0.25
+        fp_lambda=0.25, ge_lambda=0.25, smiles_lambda=0.25, cp_lambda=0.25, if_random_decoder_update=False
 ):
     batch_time = AverageMeter()
     total_losses = AverageMeter()
@@ -285,7 +292,7 @@ def train_one_epoch(
                        (ge_decoder, ge_lambda, ge_losses, "ge_features"),
                        (cp_decoder, cp_lambda, cp_losses, "cp_features")
                    ],
-                   total_losses)
+                   total_losses, if_random_decoder_update=if_random_decoder_update)
 
         batch_time.update(time.time() - end)
 
@@ -325,7 +332,7 @@ def joint_train(encoder,
                 train_loader, valid_loader, test_loader,
                 args, epochs,
                 head, ge_decoder, cp_decoder, smiles_decoder,
-                ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25, cls_lambda=1.0):
+                ge_lambda=10.0, cp_lambda=10.0, smiles_lambda=0.25, cls_lambda=1.0, if_random_decoder_update=False):
     device = args.device
     steps = len(train_loader)
     params = extract_decoder_params(encoder, decoders=[ge_decoder, cp_decoder, smiles_decoder])
@@ -345,7 +352,8 @@ def joint_train(encoder,
                                   scheduler, optimizer,
                                   epochs, epoch,
                                   head, ge_decoder, cp_decoder, smiles_decoder,
-                                  cls_lambda=cls_lambda, ge_lambda=ge_lambda, cp_lambda=cp_lambda, smiles_lambda=smiles_lambda))
+                                  cls_lambda=cls_lambda, ge_lambda=ge_lambda, cp_lambda=cp_lambda, smiles_lambda=smiles_lambda,
+                                  if_random_decoder_update=if_random_decoder_update))
         print_encoder_data(encoder, epoch, epochs, loss, components)
 
         valid_auc = roc_auc_eval(encoder, head, valid_loader, device)
@@ -362,7 +370,7 @@ def joint_train(encoder,
 def pretrain(encoder,
              train_loader,
              args, epochs,
-             decoder, ge_decoder, cp_decoder, smiles_decoder):
+             decoder, ge_decoder, cp_decoder, smiles_decoder, if_random_decoder_update=False):
     steps = len(train_loader)
     if hasattr(train_loader.sampler, "set_epoch"):
         train_loader.sampler.set_epoch(0)
@@ -386,6 +394,7 @@ def pretrain(encoder,
         train_loaders, loss, components = train_one_epoch(
             args, steps, encoder, train_loaders, optimizer, scheduler, epoch,
             fp_decoder=decoder, ge_decoder=ge_decoder, cp_decoder=cp_decoder, smiles_decoder=smiles_decoder,
+            if_random_decoder_update=if_random_decoder_update
         )
         print_encoder_data(encoder, epoch, epochs, loss, components)
 

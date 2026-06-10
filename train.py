@@ -243,6 +243,7 @@ def main():
     parser.add_argument("--head-type",       type=str,   default="small", choices=["small", "wide", "deep"], help="Architecture volume of the classification MLPs built on top of the encoder")
     parser.add_argument("--n-augmentations", type=int,   default=0, help="Number of SMILES enumerations per molecule")
     parser.add_argument("--pretrain-dataset", default=None, help="Dataset name to be used as a separate pretraining dataset (if none specified then finetune-dataset is used")
+    parser.add_argument("--if-random-decoder-update",  action="store_true", help="Whether or not to choose randomly decoder loss to use. If false, use all decoders losses.")
     cli = parser.parse_args()
 
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -274,6 +275,7 @@ def main():
     args.device      = device
     args.gpu_id      = cli.gpu_id
     args.num_workers = cli.num_workers
+    args.if_random_decoder_update = cli.if_random_decoder_update
 
     torch.manual_seed(0)
 
@@ -308,7 +310,7 @@ def main():
     # FIRST PRETRAINING ON LARGE DATASET OF SMILES
     if cli.pretrain_on_pretrain_raw:
         pretrain(encoder, fp_decoder, ge_decoder, cp_decoder, smiles_decoder, smiles_pretrain_loader, args,
-                 cli.pretrain_epochs)
+                 cli.pretrain_epochs, if_random_decoder_update=args.if_random_decoder_update)
         if cli.save_pretrained:
             os.makedirs(os.path.dirname(cli.save_pretrained) or ".", exist_ok=True)
             if local_rank <= 0:
@@ -321,7 +323,7 @@ def main():
             encoder,
             train_loader, valid_loader, test_loader,
             args, cli.finetune_epochs,
-            head, ge_decoder, cp_decoder, smiles_decoder
+            head, ge_decoder, cp_decoder, smiles_decoder,  if_random_decoder_update=args.if_random_decoder_update
         )
     else:
         # SECOND PRETRAINING ON ALL MODALITIES
@@ -330,7 +332,7 @@ def main():
                 encoder,
                 pretrain_loader,
                 args, cli.pretrain_epochs,
-                fp_decoder, ge_decoder, cp_decoder, smiles_decoder)
+                fp_decoder, ge_decoder, cp_decoder, smiles_decoder,  if_random_decoder_update=args.if_random_decoder_update)
 
         best_valid, best_test = finetune(
             encoder, not cli.no_freeze,
